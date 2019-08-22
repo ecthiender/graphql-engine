@@ -3,7 +3,6 @@ module Main where
 import           Hasura.App
 import           Hasura.Prelude
 import           Hasura.Server.Init
-
 main :: IO ()
 main =  do
   (HGEOptionsG rci hgeCmd) <- parseArgs
