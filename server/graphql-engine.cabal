@@ -147,28 +147,37 @@ library
 
   exposed-modules:     Hasura.Prelude
                      , Hasura.Logging
-                     , Hasura.EncJSON
-                     , Hasura.Db
-                     , Hasura.Cache
+
+                     , Hasura.HTTP
 
                      , Hasura.Server.App
                      , Hasura.Server.Auth
-                     , Hasura.Server.Auth.JWT
                      , Hasura.Server.Init
+                     , Hasura.Server.Query
+                     , Hasura.Server.Utils
+                     , Hasura.Server.Version
+
+                     , Hasura.RQL.Types
+                     , Hasura.App
+
+  other-modules:       Hasura.EncJSON
+                     , Hasura.Db
+                     , Hasura.Cache
+
+                     , Hasura.Server.Auth.JWT
+                     , Hasura.Server.Auth.JWT.Internal
+                     , Hasura.Server.Auth.JWT.Logging
                      , Hasura.Server.Context
                      , Hasura.Server.Middleware
                      , Hasura.Server.Logging
-                     , Hasura.Server.Query
-                     , Hasura.Server.Utils
+
                      , Hasura.Server.Cors
-                     , Hasura.Server.Version
                      , Hasura.Server.CheckUpdates
                      , Hasura.Server.Telemetry
                      , Hasura.Server.SchemaUpdate
                      , Hasura.Server.PGDump
                      , Hasura.Server.Config
 
-                     , Hasura.RQL.Types
                      , Hasura.RQL.Instances
                      , Hasura.RQL.Types.SchemaCache
                      , Hasura.RQL.Types.SchemaCacheTypes
@@ -257,8 +266,6 @@ library
                      , Hasura.Events.Lib
                      , Hasura.Events.HTTP
 
-                     , Hasura.HTTP
-
                      , Data.Text.Extended
                      , Data.Aeson.Extended
                      , Data.Sequence.NonEmpty
@@ -276,10 +283,6 @@ library
 
                      , Hasura.App.Ops
                      , Hasura.App.Migrate
-                     , Hasura.App
-
-  other-modules:       Hasura.Server.Auth.JWT.Internal
-                     , Hasura.Server.Auth.JWT.Logging
 
   default-extensions: EmptyCase
                       FlexibleContexts
