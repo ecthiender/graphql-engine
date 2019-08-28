@@ -7,6 +7,7 @@ module Hasura.Logging
   , EngineLogType(..)
   , defaultEnabledLogTypes
   , userAllowedLogTypes
+  , eventTriggerLogType
   , ToEngineLog(..)
   , debugT
   , debugBS
@@ -81,6 +82,9 @@ userAllowedLogTypes =
   , ELTWebsocketLog
   , ELTQueryLog
   ]
+
+eventTriggerLogType :: EngineLogType
+eventTriggerLogType = ELTInternal "event-trigger"
 
 data LogLevel
   = LevelDebug
