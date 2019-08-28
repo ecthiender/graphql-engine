@@ -6,7 +6,6 @@ module Hasura.Logging
   , EngineLog(..)
   , EngineLogType(..)
   , defaultEnabledLogTypes
-  -- , alwaysOnLogTypes
   , userAllowedLogTypes
   , ToEngineLog(..)
   , debugT
@@ -136,6 +135,8 @@ data LoggerCtx
   , _lcTimeGetter      :: !(IO FormattedTime)
   , _lcEnabledLogTypes :: !(Set.HashSet EngineLogType)
   , _lcLogCallback     :: !(Maybe LogCallbackFunction)
+  -- ^ An optional callback function. The actual logger function will pass the
+  -- log line to this function, to optionally perform any other operation with the log
   }
 
 data LoggerSettings

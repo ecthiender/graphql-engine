@@ -152,12 +152,6 @@ data APIHandler a
   | AHPost !(a -> Handler APIResp)
 
 
-postGql :: (Text, Text)
-postGql = ("/v1/graphql", "POST")
-
-postV1q :: (Text, Text)
-postV1q = ("/v1/query", "POST")
-
 mkGetHandler :: Handler APIResp -> APIHandler ()
 mkGetHandler = AHGet
 
@@ -239,7 +233,8 @@ logError
   -> RequestId
   -> Wai.Request
   -> Maybe Value
-  -> QErr -> m ()
+  -> QErr
+  -> m ()
 logError logger userInfoM reqId httpReq req qErr =
   liftIO $ L.unLogger logger $ mkHttpErrorLog userInfoM reqId httpReq qErr req Nothing
 
@@ -247,7 +242,6 @@ mkSpockAction
   :: (MonadIO m, FromJSON a, ToJSON a)
   => ServerCtx
   -> Maybe UserAuthMiddleware
-  -- -> Maybe (HasuraMiddleware RQLQuery)
   -> (Bool -> QErr -> Value)
   -- ^ `QErr` JSON encoder function
   -> (QErr -> QErr)
@@ -630,7 +624,14 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
   where
     logger = scLogger serverCtx
 
-    spockAction :: (FromJSON a, ToJSON a) => (Bool -> QErr -> Value) -> (QErr -> QErr) -> APIHandler a -> ActionT IO ()
+    spockAction
+      :: (FromJSON a, ToJSON a)
+      => (Bool -> QErr -> Value)
+      -- ^ A function to encode QErr
+      -> (QErr -> QErr)
+      -- ^ Function to modify QErr
+      -> APIHandler a
+      -> ActionT IO ()
     spockAction = mkSpockAction serverCtx authMiddleware
 
     -- all graphql errors should be of type 200

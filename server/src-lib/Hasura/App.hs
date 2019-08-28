@@ -192,57 +192,62 @@ initialiseCtx hgeCmd rci logCallback = do
       return $ Loggers loggerCtx logger pgLogger
 
 
-runHGEServer :: ServeOptions -> InitCtx -> Maybe UserAuthMiddleware -> Maybe (HasuraMiddleware RQLQuery) -> Maybe ConsoleRenderer -> IO ()
-runHGEServer so@(ServeOptions port host _ isoL mAdminSecret mAuthHook mJwtSecret mUnAuthRole corsCfg enableConsole consoleAssetsDir enableTelemetry strfyNum enabledAPIs lqOpts enableAL _ _) (InitCtx httpManager instanceId dbId loggers connInfo pgPool) authMiddleware metadataMiddleware renderConsole = do
-  let sqlGenCtx = SQLGenCtx strfyNum
+runHGEServer
+  :: ServeOptions
+  -> InitCtx
+  -> Maybe UserAuthMiddleware
+  -> Maybe (HasuraMiddleware RQLQuery)
+  -> Maybe ConsoleRenderer
+  -> IO ()
+runHGEServer so@ServeOptions{..} InitCtx{..} authMiddleware metadataMiddleware renderConsole = do
+  let sqlGenCtx = SQLGenCtx soStringifyNum
 
-  let Loggers loggerCtx logger _ = loggers
+  let Loggers loggerCtx logger _ = _icLoggers
 
   initTime <- Clock.getCurrentTime
   -- log serve options
   unLogger logger $ serveOptsToLog so
-  --hloggerCtx  <- mkLoggerCtx (defaultLoggerSettings False serverLogLevel) enabledLogs logCallback
 
-  authModeRes <- runExceptT $ mkAuthMode mAdminSecret mAuthHook mJwtSecret
-                                          mUnAuthRole httpManager loggerCtx
+  authModeRes <- runExceptT $ mkAuthMode soAdminSecret soAuthHook soJwtSecret
+                                         soUnAuthRole _icHttpManager loggerCtx
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
-
   (app, cacheRef, cacheInitTime) <-
-    mkWaiApp isoL loggerCtx sqlGenCtx enableAL pgPool connInfo httpManager
-      authMode corsCfg enableConsole consoleAssetsDir enableTelemetry
-      instanceId enabledAPIs lqOpts authMiddleware metadataMiddleware renderConsole
+    mkWaiApp soTxIso loggerCtx sqlGenCtx soEnableAllowlist _icPgPool _icConnInfo
+      _icHttpManager authMode soCorsConfig soEnableConsole soConsoleAssetsDir
+      soEnableTelemetry _icInstanceId soEnabledAPIs soLiveQueryOpts
+      authMiddleware metadataMiddleware renderConsole
 
   -- log inconsistent schema objects
   inconsObjs <- scInconsistentObjs <$> getSCFromRef cacheRef
   logInconsObjs logger inconsObjs
 
   -- start a background thread for schema sync
-  startSchemaSync sqlGenCtx pgPool logger httpManager
-                  cacheRef instanceId cacheInitTime
+  startSchemaSync sqlGenCtx _icPgPool logger _icHttpManager cacheRef
+    _icInstanceId cacheInitTime
 
-  let warpSettings = Warp.setPort port $ Warp.setHost host Warp.defaultSettings
+  let warpSettings = Warp.setPort soPort $ Warp.setHost soHost Warp.defaultSettings
 
   maxEvThrds <- getFromEnv defaultMaxEventThreads "HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE"
-  evFetchMilliSec  <- getFromEnv defaultFetchIntervalMilliSec "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
+  evFetchMilliSec <- getFromEnv defaultFetchIntervalMilliSec "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
   logEnvHeaders <- getFromEnv False "LOG_HEADERS_FROM_ENV"
 
   -- prepare event triggers data
-  prepareEvents pgPool logger
+  prepareEvents _icPgPool logger
   eventEngineCtx <- atomically $ initEventEngineCtx maxEvThrds evFetchMilliSec
   let scRef = _scrCache cacheRef
   unLogger logger $ mkGenericStrLog LevelInfo "event_triggers" "starting workers"
-  void $ C.forkIO $ processEventQueue loggerCtx logEnvHeaders
-    httpManager pgPool scRef eventEngineCtx
+  void $ C.forkIO $ processEventQueue loggerCtx logEnvHeaders _icHttpManager _icPgPool
+                    scRef eventEngineCtx
 
   -- start a background thread to check for updates
-  void $ C.forkIO $ checkForUpdates loggerCtx httpManager
+  void $ C.forkIO $ checkForUpdates loggerCtx _icHttpManager
 
   -- start a background thread for telemetry
-  when enableTelemetry $ do
+  when soEnableTelemetry $ do
     unLogger logger $ mkGenericStrLog LevelInfo "telemetry" telemetryNotice
-    void $ C.forkIO $ runTelemetry logger httpManager scRef dbId instanceId
+    void $ C.forkIO $ runTelemetry logger _icHttpManager scRef _icDbUid _icInstanceId
 
   finishTime <- Clock.getCurrentTime
   let apiInitTime = realToFrac $ Clock.diffUTCTime finishTime initTime

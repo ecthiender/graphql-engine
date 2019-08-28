@@ -158,7 +158,7 @@ runHTTP req exLog = do
 mkHLogger :: LoggerCtx -> HLogger
 mkHLogger (LoggerCtx loggerSet serverLogLevel timeGetter enabledLogs callbackFn) (logLevel, logTy, logDet) = do
   localTime <- timeGetter
-  when (logLevel >= serverLogLevel && logTy `Set.member` enabledLogs) $ do
-    let logStr = EngineLog localTime logLevel logTy logDet
+  let logStr = EngineLog localTime logLevel logTy logDet
+  forM_ callbackFn $ \func -> func logStr
+  when (logLevel >= serverLogLevel && logTy `Set.member` enabledLogs) $
     FL.pushLogStrLn loggerSet $ FL.toLogStr (J.encode logStr)
-    forM_ callbackFn $ \func -> func logStr
