@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+
 module Hasura.App where
 
 import           Control.Monad.STM          (atomically)
@@ -37,7 +38,6 @@ import           Hasura.Server.App          (ConsoleRenderer, HasuraMiddleware,
 import           Hasura.Server.Auth
 import           Hasura.Server.CheckUpdates (checkForUpdates)
 import           Hasura.Server.Init
-import           Hasura.Server.Logging
 import           Hasura.Server.Query        (RQLQuery, Run, peelRun)
 import           Hasura.Server.SchemaUpdate
 import           Hasura.Server.Telemetry
@@ -112,51 +112,42 @@ printJSON = BLC.putStrLn . A.encode
 printYaml :: (A.ToJSON a) => a -> IO ()
 printYaml = BC.putStrLn . Y.encode
 
-mkPGLogger :: Logger -> Q.PGLogger
-mkPGLogger (Logger logger) (Q.PLERetryMsg msg) =
-  logger $ PGLog LevelWarn msg
-
-
 -- | most of the required types for initializing graphql-engine
-data InitCtx
+data InitCtx a
   = InitCtx
   { _icHttpManager :: !HTTP.Manager
   , _icInstanceId  :: !InstanceId
   , _icDbUid       :: !Text
-  , _icLoggers     :: !Loggers
+  , _icLoggers     :: !(Loggers a)
   , _icConnInfo    :: !Q.ConnInfo
   , _icPgPool      :: !Q.PGPool
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
-data Loggers
+data Loggers a
   = Loggers
-  { _loggersLoggerCtx :: !LoggerCtx
+  { _loggersLoggerCtx :: !(LoggerCtx a)
   , _loggersLogger    :: !Logger
   , _loggersPgLogger  :: !Q.PGLogger
   }
 
 -- | a separate function to create the initialization context because some of
 -- these contexts might be used by external functions
-initialiseCtx :: HGECommand -> RawConnInfo -> Maybe LogCallbackFunction -> IO InitCtx
-initialiseCtx hgeCmd rci logCallback = do
-  -- global http manager
+initialiseCtx :: (MakeLogger a) => HGECommand -> RawConnInfo -> a -> IO (InitCtx a)
+initialiseCtx hgeCmd rci loggingExtra = do
   httpManager <- HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- generateInstanceId
   connInfo <- procConnInfo
-  (loggerThings, pool) <- case hgeCmd of
+  (loggers, pool) <- case hgeCmd of
     HCServe ServeOptions{..} -> do
       l@(Loggers _ logger pgLogger) <- mkLoggers soEnabledLogTypes soLogLevel
       let sqlGenCtx = SQLGenCtx soStringifyNum
       -- log postgres connection info
       unLogger logger $ connInfoToLog connInfo
       pool <- Q.initPGPool connInfo soConnParams pgLogger
-
       -- safe init catalog
       initialise pool sqlGenCtx logger
-
       return (l, pool)
-
     _ -> do
       l@(Loggers _ _ pgLogger) <- mkLoggers defaultEnabledLogTypes LevelInfo
       pool <- getMinimalPool pgLogger connInfo
@@ -166,7 +157,7 @@ initialiseCtx hgeCmd rci logCallback = do
   eDbId <- runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
   dbId <- either printErrJExit return eDbId
 
-  return $ InitCtx httpManager instanceId dbId loggerThings connInfo pool
+  return $ InitCtx httpManager instanceId dbId loggers connInfo pool
   where
     initialise pool sqlGenCtx (Logger logger) = do
       currentTime <- getCurrentTime
@@ -186,15 +177,15 @@ initialiseCtx hgeCmd rci logCallback = do
       Q.initPGPool ci connParams pgLogger
 
     mkLoggers enabledLogs logLevel = do
-      loggerCtx <- mkLoggerCtx (defaultLoggerSettings True logLevel) enabledLogs logCallback
-      let logger = mkLogger loggerCtx
+      loggerCtx <- mkLoggerCtx (defaultLoggerSettings True logLevel) enabledLogs loggingExtra
+      let logger = makeLogger loggerCtx
           pgLogger = mkPGLogger logger
       return $ Loggers loggerCtx logger pgLogger
 
 
 runHGEServer
   :: ServeOptions
-  -> InitCtx
+  -> InitCtx a
   -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
@@ -208,13 +199,13 @@ runHGEServer so@ServeOptions{..} InitCtx{..} authMiddleware metadataMiddleware r
   -- log serve options
   unLogger logger $ serveOptsToLog so
 
-  authModeRes <- runExceptT $ mkAuthMode soAdminSecret soAuthHook soJwtSecret
-                                         soUnAuthRole _icHttpManager loggerCtx
+  authModeRes <- runExceptT $ flip runReaderT (logger, _icHttpManager) $
+                 mkAuthMode soAdminSecret soAuthHook soJwtSecret soUnAuthRole
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
   (app, cacheRef, cacheInitTime) <-
-    mkWaiApp soTxIso loggerCtx sqlGenCtx soEnableAllowlist _icPgPool _icConnInfo
+    mkWaiApp soTxIso logger sqlGenCtx soEnableAllowlist _icPgPool _icConnInfo
       _icHttpManager authMode soCorsConfig soEnableConsole soConsoleAssetsDir
       soEnableTelemetry _icInstanceId soEnabledAPIs soLiveQueryOpts
       authMiddleware metadataMiddleware renderConsole
@@ -238,7 +229,7 @@ runHGEServer so@ServeOptions{..} InitCtx{..} authMiddleware metadataMiddleware r
   eventEngineCtx <- atomically $ initEventEngineCtx maxEvThrds evFetchMilliSec
   let scRef = _scrCache cacheRef
   unLogger logger $ mkGenericStrLog LevelInfo "event_triggers" "starting workers"
-  void $ C.forkIO $ processEventQueue loggerCtx logEnvHeaders _icHttpManager _icPgPool
+  void $ C.forkIO $ processEventQueue logger logEnvHeaders _icHttpManager _icPgPool
                     scRef eventEngineCtx
 
   -- start a background thread to check for updates
@@ -284,7 +275,7 @@ runAsAdmin pool sqlGenCtx m = do
 
 handleCommand
   :: HGECommand
-  -> InitCtx
+  -> InitCtx a
   -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer

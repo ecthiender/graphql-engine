@@ -2,7 +2,6 @@
 
 module Hasura.Server.Logging
   ( StartupLog(..)
-  , PGLog(..)
   , mkInconsMetadataLog
   , mkHttpAccessLog
   , mkHttpErrorLog
@@ -54,20 +53,6 @@ instance ToJSON StartupLog where
 instance L.ToEngineLog StartupLog where
   toEngineLog startupLog =
     (slLogLevel startupLog, ELTStartup, toJSON startupLog)
-
-data PGLog
-  = PGLog
-  { plLogLevel :: !L.LogLevel
-  , plMessage  :: !T.Text
-  } deriving (Show, Eq)
-
-instance ToJSON PGLog where
-  toJSON (PGLog _ msg) =
-    object ["message" .= msg]
-
-instance L.ToEngineLog PGLog where
-  toEngineLog pgLog =
-    (plLogLevel pgLog, ELTInternal "pg-client", toJSON pgLog)
 
 data MetadataLog
   = MetadataLog

@@ -463,7 +463,7 @@ initErrExit e = do
 
 mkWaiApp
   :: Q.TxIsolation
-  -> L.LoggerCtx
+  -> L.Logger
   -> SQLGenCtx
   -> Bool
   -> Q.PGPool
@@ -481,7 +481,7 @@ mkWaiApp
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
   -> IO (Wai.Application, SchemaCacheRef, Maybe UTCTime)
-mkWaiApp isoLevel loggerCtx sqlGenCtx enableAL pool ci httpManager mode corsCfg
+mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg
          enableConsole consoleAssetsDir enableTelemetry instanceId apis
          lqOpts authMiddleware metadataMiddleware renderConsole = do
     let pgExecCtx = PGExecCtx pool isoLevel
@@ -499,7 +499,6 @@ mkWaiApp isoLevel loggerCtx sqlGenCtx enableAL pool ci httpManager mode corsCfg
     planCache <- E.initPlanCache
 
     let corsPolicy = mkDefaultCorsPolicy corsCfg
-        logger = L.mkLogger loggerCtx
 
     lqState <- EL.initLiveQueriesState lqOpts pgExecCtx
     wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState cacheRef

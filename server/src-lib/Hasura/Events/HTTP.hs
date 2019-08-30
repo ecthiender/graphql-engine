@@ -4,8 +4,7 @@ module Hasura.Events.HTTP
   , runHTTP
   , isNetworkError
   , isNetworkErrorHC
-  , HLogger
-  , mkHLogger
+  , Logger(..)
   , ExtraContext(..)
   ) where
 
@@ -14,8 +13,6 @@ import qualified Data.Aeson.Casing             as J
 import qualified Data.Aeson.TH                 as J
 import qualified Data.ByteString.Lazy          as B
 import qualified Data.CaseInsensitive          as CI
-import           Data.Either
-import qualified Data.HashSet                  as Set
 import qualified Data.TByteString              as TBS
 import qualified Data.Text                     as T
 import qualified Data.Text.Encoding            as TE
@@ -23,18 +20,16 @@ import qualified Data.Text.Encoding.Error      as TE
 import qualified Data.Time.Clock               as Time
 import qualified Network.HTTP.Client           as HTTP
 import qualified Network.HTTP.Types            as HTTP
-import qualified System.Log.FastLogger         as FL
 
 import           Control.Exception             (try)
 import           Control.Monad.IO.Class        (MonadIO, liftIO)
 import           Control.Monad.Reader          (MonadReader)
+import           Data.Either
 import           Data.Has
 import           Hasura.Logging
 import           Hasura.Prelude
 import           Hasura.RQL.DDL.Headers
 import           Hasura.RQL.Types.EventTrigger
-
-type HLogger = (LogLevel, EngineLogType, J.Value) -> IO ()
 
 data ExtraContext
   = ExtraContext
@@ -54,7 +49,7 @@ data HTTPResp
 $(J.deriveToJSON (J.aesonDrop 3 J.snakeCase){J.omitNothingFields=True} ''HTTPResp)
 
 instance ToEngineLog HTTPResp where
-  toEngineLog resp = (LevelInfo, eventTriggerLogType, J.toJSON resp )
+  toEngineLog resp = (LevelInfo, eventTriggerLogType, J.toJSON resp)
 
 mkHTTPResp :: HTTP.Response B.ByteString -> HTTPResp
 mkHTTPResp resp =
@@ -142,23 +137,15 @@ instance ToEngineLog  HTTPReq where
 runHTTP
   :: ( MonadReader r m
      , MonadIO m
-     , Has HLogger r
+     , Has Logger r
      , Has HTTP.Manager r
      )
   => HTTP.Request -> Maybe ExtraContext -> m (Either HTTPErr HTTPResp)
 runHTTP req exLog = do
-  (logF:: HLogger) <- asks getter
+  Logger logF <- asks getter
   manager <- asks getter
   res <- liftIO $ try $ HTTP.httpLbs req manager
   case res of
-    Left e -> liftIO $ logF $ toEngineLog $ HClient e
-    Right resp -> liftIO $ logF $ toEngineLog $ HTTPRespExtra (mkHTTPResp resp) exLog
+    Left e     -> liftIO $ logF $ HClient e
+    Right resp -> liftIO $ logF $ HTTPRespExtra (mkHTTPResp resp) exLog
   return $ either (Left . HClient) anyBodyParser res
-
-mkHLogger :: LoggerCtx -> HLogger
-mkHLogger (LoggerCtx loggerSet serverLogLevel timeGetter enabledLogs callbackFn) (logLevel, logTy, logDet) = do
-  localTime <- timeGetter
-  let logStr = EngineLog localTime logLevel logTy logDet
-  forM_ callbackFn $ \func -> func logStr
-  when (logLevel >= serverLogLevel && logTy `Set.member` enabledLogs) $
-    FL.pushLogStrLn loggerSet $ FL.toLogStr (J.encode logStr)

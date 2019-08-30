@@ -21,6 +21,7 @@ module Hasura.Server.Auth
 import           Control.Exception      (try)
 import           Control.Lens
 import           Data.Aeson
+import           Data.Has
 import           Data.IORef             (newIORef)
 import           Data.Time.Clock        (UTCTime)
 
@@ -74,22 +75,23 @@ data AuthMode
 mkAuthMode
   :: ( MonadIO m
      , MonadError T.Text m
+     , MonadReader r m
+     , Has Logger r
+     , Has H.Manager r
      )
   => Maybe AdminSecret
   -> Maybe AuthHook
   -> Maybe JWTConfig
   -> Maybe RoleName
-  -> H.Manager
-  -> LoggerCtx
   -> m AuthMode
-mkAuthMode mAdminSecret mWebHook mJwtSecret mUnAuthRole httpManager lCtx =
+mkAuthMode mAdminSecret mWebHook mJwtSecret mUnAuthRole =
   case (mAdminSecret, mWebHook, mJwtSecret) of
     (Nothing,  Nothing,   Nothing)      -> return AMNoAuth
     (Just key, Nothing,   Nothing)      -> return $ AMAdminSecret key mUnAuthRole
     (Just key, Just hook, Nothing)      -> unAuthRoleNotReqForWebHook >>
                                            return (AMAdminSecretAndHook key hook)
     (Just key, Nothing,   Just jwtConf) -> do
-      jwtCtx <- mkJwtCtx jwtConf httpManager lCtx
+      jwtCtx <- mkJwtCtx jwtConf
       return $ AMAdminSecretAndJWT key jwtCtx mUnAuthRole
 
     (Nothing, Just _, Nothing)     -> throwError $
@@ -112,22 +114,24 @@ mkAuthMode mAdminSecret mWebHook mJwtSecret mUnAuthRole httpManager lCtx =
 mkJwtCtx
   :: ( MonadIO m
      , MonadError T.Text m
+     , Has Logger r
+     , Has H.Manager r
+     , MonadReader r m
      )
   => JWTConfig
-  -> H.Manager
-  -> LoggerCtx
   -> m JWTCtx
-mkJwtCtx conf httpManager loggerCtx = do
+mkJwtCtx conf = do
+  logger <- asks getter
+  manager <- asks getter
   jwkRef <- case jcKeyOrUrl conf of
     Left jwk  -> liftIO $ newIORef (JWKSet [jwk])
     Right url -> do
       ref <- liftIO $ newIORef $ JWKSet []
-      let logger = mkLogger loggerCtx
-      mTime <- updateJwkRef logger httpManager url ref
+      mTime <- updateJwkRef logger manager url ref
       case mTime of
         Nothing -> return ref
         Just t -> do
-          jwkRefreshCtrl logger httpManager url ref t
+          jwkRefreshCtrl url ref t
           return ref
   let claimsFmt = fromMaybe JCFJson (jcClaimsFormat conf)
   return $ JWTCtx jwkRef (jcClaimNs conf) (jcAudience conf) claimsFmt (jcIssuer conf)
