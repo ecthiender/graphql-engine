@@ -121,15 +121,12 @@ $(J.deriveToJSON (J.aesonDrop 3 J.snakeCase) ''EngineLog)
 class ToEngineLog a where
   toEngineLog :: a -> (LogLevel, EngineLogType, J.Value)
 
-data LoggerCtx a
+data LoggerCtx
   = LoggerCtx
   { _lcLoggerSet       :: !FL.LoggerSet
   , _lcLogLevel        :: !LogLevel
   , _lcTimeGetter      :: !(IO FormattedTime)
   , _lcEnabledLogTypes :: !(Set.HashSet EngineLogType)
-  , _lcArbitrary       :: !a
-  -- ^ Any arbitrary value to have so this can be parameterized to have
-  -- different implementations of the logging
   }
 
 data LoggerSettings
@@ -141,9 +138,9 @@ data LoggerSettings
   } deriving (Show, Eq)
 
 class MakeLogger a where
-  -- | Typeclass which is parametrized over the arbitrary value in LoggerCtx, which
-  -- can be used to have different implementations of the actual function in @Logger@
-  makeLogger :: LoggerCtx a -> Logger
+  -- | Typeclass which is parametrized over a, which can be used to have different implementations
+  -- of the actual function in @Logger@
+  makeLogger :: a -> LoggerCtx -> Logger
 
 newtype Logger =
   Logger { unLogger :: forall a. (ToEngineLog a) => a -> IO () }
@@ -166,19 +163,18 @@ getFormattedTime tzM = do
 mkLoggerCtx
   :: LoggerSettings
   -> Set.HashSet EngineLogType
-  -> a
-  -> IO (LoggerCtx a)
-mkLoggerCtx (LoggerSettings cacheTime tzM logLevel) enabledLogs extra = do
+  -> IO LoggerCtx
+mkLoggerCtx (LoggerSettings cacheTime tzM logLevel) enabledLogs = do
   loggerSet <- FL.newStdoutLoggerSet FL.defaultBufSize
   timeGetter <- bool (return $ getFormattedTime tzM) cachedTimeGetter cacheTime
-  return $ LoggerCtx loggerSet logLevel timeGetter enabledLogs extra
+  return $ LoggerCtx loggerSet logLevel timeGetter enabledLogs
   where
     cachedTimeGetter =
       Auto.mkAutoUpdate Auto.defaultUpdateSettings {
         Auto.updateAction = getFormattedTime tzM
       }
 
-cleanLoggerCtx :: LoggerCtx a -> IO ()
+cleanLoggerCtx :: LoggerCtx -> IO ()
 cleanLoggerCtx =
   FL.rmLoggerSet . _lcLoggerSet
 
@@ -187,7 +183,7 @@ cleanLoggerCtx =
 data HGELogging = HGELogging
 
 instance MakeLogger HGELogging where
-  makeLogger (LoggerCtx loggerSet serverLogLevel timeGetter enabledLogTypes _) = Logger $ \l -> do
+  makeLogger HGELogging (LoggerCtx loggerSet serverLogLevel timeGetter enabledLogTypes) = Logger $ \l -> do
     localTime <- timeGetter
     let (logLevel, logTy, logDet) = toEngineLog l
     when (logLevel >= serverLogLevel && isLogTypeEnabled enabledLogTypes logTy) $

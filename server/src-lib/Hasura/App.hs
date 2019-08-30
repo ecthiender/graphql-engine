@@ -113,27 +113,27 @@ printYaml :: (A.ToJSON a) => a -> IO ()
 printYaml = BC.putStrLn . Y.encode
 
 -- | Bunch of resources required to initialize the server
-data InitContext a
+data InitContext
   = InitContext
   { _icConnInfo    :: !Q.ConnInfo
   , _icPgPool      :: !Q.PGPool
   , _icInstanceId  :: !InstanceId
   , _icDbUid       :: !Text
   , _icHttpManager :: !HTTP.Manager
-  , _icLoggers     :: !(Loggers a)
+  , _icLoggers     :: !Loggers
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
-data Loggers a
+data Loggers
   = Loggers
-  { _loggersLoggerCtx :: !(LoggerCtx a)
+  { _loggersLoggerCtx :: !LoggerCtx
   , _loggersLogger    :: !Logger
   , _loggersPgLogger  :: !Q.PGLogger
   }
 
 -- | a separate function to create the initialization context because some of
 -- these contexts might be used by external functions
-mkInitContext :: (MakeLogger a) => HGECommand -> RawConnInfo -> a -> IO (InitContext a)
+mkInitContext :: (MakeLogger a) => HGECommand -> RawConnInfo -> a -> IO InitContext
 mkInitContext hgeCmd rci loggingExtra = do
   httpManager <- HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- generateInstanceId
@@ -177,8 +177,8 @@ mkInitContext hgeCmd rci loggingExtra = do
       Q.initPGPool ci connParams pgLogger
 
     mkLoggers enabledLogs logLevel = do
-      loggerCtx <- mkLoggerCtx (defaultLoggerSettings True logLevel) enabledLogs loggingExtra
-      let logger = makeLogger loggerCtx
+      loggerCtx <- mkLoggerCtx (defaultLoggerSettings True logLevel) enabledLogs
+      let logger = makeLogger loggingExtra loggerCtx
           pgLogger = mkPGLogger logger
       return $ Loggers loggerCtx logger pgLogger
 
@@ -188,7 +188,7 @@ mkInitContext hgeCmd rci loggingExtra = do
 
 runHGEServer
   :: ServeOptions
-  -> InitContext a
+  -> InitContext
   -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
@@ -278,7 +278,7 @@ runAsAdmin pool sqlGenCtx m = do
 
 handleCommand
   :: HGECommand
-  -> InitContext a
+  -> InitContext
   -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
