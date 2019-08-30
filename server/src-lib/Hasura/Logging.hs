@@ -23,11 +23,9 @@ module Hasura.Logging
   , debugT
   , debugBS
   , debugLBS
-  , LogCallbackFunction
   , MakeLogger(..)
 
   , PGLog(..)
-  , mkPGLogger
   ) where
 
 import           Hasura.Prelude
@@ -45,8 +43,6 @@ import qualified Data.Time.Clock       as Time
 import qualified Data.Time.Format      as Format
 import qualified Data.Time.LocalTime   as Time
 import qualified System.Log.FastLogger as FL
-
-import qualified Database.PG.Query     as Q
 
 newtype FormattedTime
   = FormattedTime { _unFormattedTime :: Text }
@@ -132,8 +128,8 @@ data LoggerCtx a
   , _lcTimeGetter      :: !(IO FormattedTime)
   , _lcEnabledLogTypes :: !(Set.HashSet EngineLogType)
   , _lcArbitrary       :: !a
-  -- ^ An optional callback function. The actual logger function will pass the
-  -- log line to this function, to optionally perform any other operation with the log
+  -- ^ Any arbitrary value to have so this can be parameterized to have
+  -- different implementations of the logging
   }
 
 data LoggerSettings
@@ -144,7 +140,13 @@ data LoggerSettings
   , _lsLevel           :: !LogLevel
   } deriving (Show, Eq)
 
-type LogCallbackFunction = EngineLog -> IO ()
+class MakeLogger a where
+  -- | Typeclass which is parametrized over the arbitrary value in LoggerCtx, which
+  -- can be used to have different implementations of the actual function in @Logger@
+  makeLogger :: LoggerCtx a -> Logger
+
+newtype Logger =
+  Logger { unLogger :: forall a. (ToEngineLog a) => a -> IO () }
 
 defaultLoggerSettings :: Bool -> LogLevel -> LoggerSettings
 defaultLoggerSettings isCached =
@@ -180,29 +182,16 @@ cleanLoggerCtx :: LoggerCtx a -> IO ()
 cleanLoggerCtx =
   FL.rmLoggerSet . _lcLoggerSet
 
--- Phantom type to infer logging implementation
-class MakeLogger a where
-  makeLogger :: LoggerCtx a -> Logger
-
-newtype Logger =
-  Logger { unLogger :: forall a. (ToEngineLog a) => a -> IO () }
-
--- Phantom type to infer logging implementation
+-- | type with no extra information, because in this implementation of logging
+-- we don't need any extra information
 data HGELogging = HGELogging
 
 instance MakeLogger HGELogging where
-  makeLogger = mkLogger
-
-mkLogger :: LoggerCtx HGELogging -> Logger
-mkLogger (LoggerCtx loggerSet serverLogLevel timeGetter enabledLogTypes _) = Logger $ \l -> do
-  localTime <- timeGetter
-  let (logLevel, logTy, logDet) = toEngineLog l
-  when (logLevel >= serverLogLevel && isLogTypeEnabled enabledLogTypes logTy) $
-    FL.pushLogStrLn loggerSet $ FL.toLogStr $ J.encode $ EngineLog localTime logLevel logTy logDet
-
-mkPGLogger :: Logger -> Q.PGLogger
-mkPGLogger (Logger logger) (Q.PLERetryMsg msg) =
-  logger $ PGLog LevelWarn msg
+  makeLogger (LoggerCtx loggerSet serverLogLevel timeGetter enabledLogTypes _) = Logger $ \l -> do
+    localTime <- timeGetter
+    let (logLevel, logTy, logDet) = toEngineLog l
+    when (logLevel >= serverLogLevel && isLogTypeEnabled enabledLogTypes logTy) $
+      FL.pushLogStrLn loggerSet $ FL.toLogStr $ J.encode $ EngineLog localTime logLevel logTy logDet
 
 
 newtype UnstructuredLog

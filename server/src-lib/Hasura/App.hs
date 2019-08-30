@@ -112,15 +112,15 @@ printJSON = BLC.putStrLn . A.encode
 printYaml :: (A.ToJSON a) => a -> IO ()
 printYaml = BC.putStrLn . Y.encode
 
--- | most of the required types for initializing graphql-engine
-data InitCtx a
-  = InitCtx
-  { _icHttpManager :: !HTTP.Manager
+-- | Bunch of resources required to initialize the server
+data InitContext a
+  = InitContext
+  { _icConnInfo    :: !Q.ConnInfo
+  , _icPgPool      :: !Q.PGPool
   , _icInstanceId  :: !InstanceId
   , _icDbUid       :: !Text
+  , _icHttpManager :: !HTTP.Manager
   , _icLoggers     :: !(Loggers a)
-  , _icConnInfo    :: !Q.ConnInfo
-  , _icPgPool      :: !Q.PGPool
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
@@ -133,8 +133,8 @@ data Loggers a
 
 -- | a separate function to create the initialization context because some of
 -- these contexts might be used by external functions
-initialiseCtx :: (MakeLogger a) => HGECommand -> RawConnInfo -> a -> IO (InitCtx a)
-initialiseCtx hgeCmd rci loggingExtra = do
+mkInitContext :: (MakeLogger a) => HGECommand -> RawConnInfo -> a -> IO (InitContext a)
+mkInitContext hgeCmd rci loggingExtra = do
   httpManager <- HTTP.newManager HTTP.tlsManagerSettings
   instanceId <- generateInstanceId
   connInfo <- procConnInfo
@@ -157,7 +157,7 @@ initialiseCtx hgeCmd rci loggingExtra = do
   eDbId <- runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
   dbId <- either printErrJExit return eDbId
 
-  return $ InitCtx httpManager instanceId dbId loggers connInfo pool
+  return $ InitContext connInfo pool instanceId dbId httpManager loggers
   where
     initialise pool sqlGenCtx (Logger logger) = do
       currentTime <- getCurrentTime
@@ -182,15 +182,18 @@ initialiseCtx hgeCmd rci loggingExtra = do
           pgLogger = mkPGLogger logger
       return $ Loggers loggerCtx logger pgLogger
 
+    mkPGLogger (Logger logger) (Q.PLERetryMsg msg) =
+      logger $ PGLog LevelWarn msg
+
 
 runHGEServer
   :: ServeOptions
-  -> InitCtx a
+  -> InitContext a
   -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
   -> IO ()
-runHGEServer so@ServeOptions{..} InitCtx{..} authMiddleware metadataMiddleware renderConsole = do
+runHGEServer so@ServeOptions{..} InitContext{..} authMiddleware metadataMiddleware renderConsole = do
   let sqlGenCtx = SQLGenCtx soStringifyNum
 
   let Loggers loggerCtx logger _ = _icLoggers
@@ -275,12 +278,12 @@ runAsAdmin pool sqlGenCtx m = do
 
 handleCommand
   :: HGECommand
-  -> InitCtx a
+  -> InitContext a
   -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
   -> IO ()
-handleCommand hgeCmd initCtx@(InitCtx _ _ _ _ _ pgPool)
+handleCommand hgeCmd initCtx@(InitContext _ pgPool _ _ _ _)
   authMiddleware metadataMiddleware renderConsole =
 
   case hgeCmd of
