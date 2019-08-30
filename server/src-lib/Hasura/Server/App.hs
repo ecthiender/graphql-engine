@@ -238,17 +238,28 @@ logError
 logError logger userInfoM reqId httpReq req qErr =
   liftIO $ L.unLogger logger $ mkHttpErrorLog userInfoM reqId httpReq qErr req Nothing
 
+
+class UserInfoResolver auth where
+  resolveUserInfo
+    :: (MonadIO m, MonadError QErr m)
+    => auth -> L.Logger -> HTTP.Manager -> [N.Header] -> AuthMode -> m UserInfo
+
+data HGEAuth = HGEAuth
+
+instance UserInfoResolver HGEAuth where
+  resolveUserInfo _ = getUserInfo
+
 mkSpockAction
-  :: (MonadIO m, FromJSON a, ToJSON a)
+  :: (MonadIO m, FromJSON a, ToJSON a, UserInfoResolver auth)
   => ServerCtx
-  -> Maybe UserAuthMiddleware
+  -> auth
   -> (Bool -> QErr -> Value)
   -- ^ `QErr` JSON encoder function
   -> (QErr -> QErr)
   -- ^ `QErr` modifier
   -> APIHandler a
   -> ActionT m ()
-mkSpockAction serverCtx userAuthMiddleware qErrEncoder qErrModifier apiHandler = do
+mkSpockAction serverCtx auth qErrEncoder qErrModifier apiHandler = do
   req <- request
   reqBody <- liftIO $ strictRequestBody req
   let headers = requestHeaders req
@@ -258,9 +269,7 @@ mkSpockAction serverCtx userAuthMiddleware qErrEncoder qErrModifier apiHandler =
       reqTxt = Just $ String $ bsToTxt $ BL.toStrict reqBody
 
   requestId <- getRequestId headers
-  -- default to @getUserInfo@ if no user-auth middleware is passed
-  let resolveUserInfo = fromMaybe getUserInfo userAuthMiddleware
-  userInfoE <- liftIO $ runExceptT $ resolveUserInfo logger manager headers authMode
+  userInfoE <- liftIO $ runExceptT $ resolveUserInfo auth logger manager headers authMode
   userInfo  <- either (logErrorAndResp Nothing requestId req reqTxt False . qErrModifier)
                return userInfoE
 
@@ -462,7 +471,8 @@ initErrExit e = do
   exitFailure
 
 mkWaiApp
-  :: Q.TxIsolation
+  :: (UserInfoResolver auth)
+  => Q.TxIsolation
   -> L.Logger
   -> SQLGenCtx
   -> Bool
@@ -477,13 +487,13 @@ mkWaiApp
   -> InstanceId
   -> S.HashSet API
   -> EL.LQOpts
-  -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
+  -> auth
   -> IO (Wai.Application, SchemaCacheRef, Maybe UTCTime)
 mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg
          enableConsole consoleAssetsDir enableTelemetry instanceId apis
-         lqOpts authMiddleware metadataMiddleware renderConsole = do
+         lqOpts metadataMiddleware renderConsole auth = do
     let pgExecCtx = PGExecCtx pool isoLevel
         pgExecCtxSer = PGExecCtx pool Q.Serializable
     (cacheRef, cacheBuiltTime) <- do
@@ -519,7 +529,7 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg
 
     spockApp <- spockAsApp $ spockT id $
                 httpApp corsCfg serverCtx enableConsole
-                  consoleAssetsDir enableTelemetry authMiddleware metadataMiddleware renderConsole
+                  consoleAssetsDir enableTelemetry metadataMiddleware renderConsole auth
 
     let wsServerApp = WS.createWSServerApp mode wsServerEnv
     return ( WS.websocketsOr WS.defaultConnectionOptions wsServerApp spockApp
@@ -531,19 +541,20 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg
     getTimeMs = (round . (* 1000)) `fmap` getPOSIXTime
 
 httpApp
-  :: CorsConfig
+  :: (UserInfoResolver auth)
+  => CorsConfig
   -> ServerCtx
   -> Bool
   -> Maybe Text
   -> Bool
-  -> Maybe UserAuthMiddleware
   -> Maybe (HasuraMiddleware RQLQuery)
   -- ^ The current middleware is only for RQLQuery (metadata) queries, in future
   -- this can be extended to take a `HashMap (HttpMethod, Path) (HasuraMiddleware a)`
   -> Maybe ConsoleRenderer
+  -> auth
   -> SpockT IO ()
 httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
-        authMiddleware metadataMiddleware consoleRenderer = do
+        metadataMiddleware consoleRenderer auth = do
 
     -- cors middleware
     unless (isCorsDisabled corsCfg) $
@@ -569,7 +580,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
         mkPostHandler $ mkAPIRespHandler (v1QueryHandler metadataMiddleware)
 
       post ("api/1/table" <//> var <//> var) $ \tableName queryType ->
-        mkSpockAction serverCtx authMiddleware encodeQErr id $ mkPostHandler $
+        mkSpockAction serverCtx auth encodeQErr id $ mkPostHandler $
           mkAPIRespHandler $ legacyQueryHandler metadataMiddleware (TableName tableName) queryType
 
     when enablePGDump $
@@ -631,7 +642,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
       -- ^ Function to modify QErr
       -> APIHandler a
       -> ActionT IO ()
-    spockAction = mkSpockAction serverCtx authMiddleware
+    spockAction = mkSpockAction serverCtx auth
 
     -- all graphql errors should be of type 200
     allMod200 qe = qe { qeStatus = N.status200 }

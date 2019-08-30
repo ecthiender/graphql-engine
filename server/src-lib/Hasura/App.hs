@@ -33,8 +33,9 @@ import           Hasura.RQL.Types           (QErr, SQLGenCtx (..),
                                              emptySchemaCache)
 import           Hasura.Server.App          (ConsoleRenderer, HasuraMiddleware,
                                              SchemaCacheRef (..),
-                                             UserAuthMiddleware, getSCFromRef,
-                                             logInconsObjs, mkWaiApp)
+                                             UserInfoResolver (..),
+                                             getSCFromRef, logInconsObjs,
+                                             mkWaiApp)
 import           Hasura.Server.Auth
 import           Hasura.Server.CheckUpdates (checkForUpdates)
 import           Hasura.Server.Init
@@ -187,13 +188,14 @@ mkInitContext hgeCmd rci loggingExtra = do
 
 
 runHGEServer
-  :: ServeOptions
+  :: (UserInfoResolver auth)
+  => ServeOptions
   -> InitContext
-  -> Maybe UserAuthMiddleware
+  -> auth
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
   -> IO ()
-runHGEServer so@ServeOptions{..} InitContext{..} authMiddleware metadataMiddleware renderConsole = do
+runHGEServer so@ServeOptions{..} InitContext{..} auth metadataMiddleware renderConsole = do
   let sqlGenCtx = SQLGenCtx soStringifyNum
 
   let Loggers loggerCtx logger _ = _icLoggers
@@ -211,7 +213,7 @@ runHGEServer so@ServeOptions{..} InitContext{..} authMiddleware metadataMiddlewa
     mkWaiApp soTxIso logger sqlGenCtx soEnableAllowlist _icPgPool _icConnInfo
       _icHttpManager authMode soCorsConfig soEnableConsole soConsoleAssetsDir
       soEnableTelemetry _icInstanceId soEnabledAPIs soLiveQueryOpts
-      authMiddleware metadataMiddleware renderConsole
+      metadataMiddleware renderConsole auth
 
   -- log inconsistent schema objects
   inconsObjs <- scInconsistentObjs <$> getSCFromRef cacheRef
@@ -277,17 +279,18 @@ runAsAdmin pool sqlGenCtx m = do
 
 
 handleCommand
-  :: HGECommand
+  :: (UserInfoResolver auth)
+  => HGECommand
   -> InitContext
-  -> Maybe UserAuthMiddleware
+  -> auth
   -> Maybe (HasuraMiddleware RQLQuery)
   -> Maybe ConsoleRenderer
   -> IO ()
 handleCommand hgeCmd initCtx@(InitContext _ pgPool _ _ _ _)
-  authMiddleware metadataMiddleware renderConsole =
+  auth metadataMiddleware renderConsole =
 
   case hgeCmd of
-    HCServe so -> runHGEServer so initCtx authMiddleware metadataMiddleware renderConsole
+    HCServe so -> runHGEServer so initCtx auth metadataMiddleware renderConsole
     HCExport -> do
       res <- runTx' fetchMetadata
       either printErrJExit printJSON res
