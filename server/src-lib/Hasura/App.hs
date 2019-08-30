@@ -113,25 +113,6 @@ printJSON = BLC.putStrLn . A.encode
 printYaml :: (A.ToJSON a) => a -> IO ()
 printYaml = BC.putStrLn . Y.encode
 
--- | Bunch of resources required to initialize the server
-data InitContext
-  = InitContext
-  { _icConnInfo    :: !Q.ConnInfo
-  , _icPgPool      :: !Q.PGPool
-  , _icInstanceId  :: !InstanceId
-  , _icDbUid       :: !Text
-  , _icHttpManager :: !HTTP.Manager
-  , _icLoggers     :: !Loggers
-  }
-
--- | Collection of the LoggerCtx, the regular Logger and the PGLogger
-data Loggers
-  = Loggers
-  { _loggersLoggerCtx :: !LoggerCtx
-  , _loggersLogger    :: !Logger
-  , _loggersPgLogger  :: !Q.PGLogger
-  }
-
 -- | a separate function to create the initialization context because some of
 -- these contexts might be used by external functions
 mkInitContext :: (MakeLogger a) => HGECommand -> RawConnInfo -> a -> IO InitContext
@@ -187,33 +168,72 @@ mkInitContext hgeCmd rci loggingExtra = do
       logger $ PGLog LevelWarn msg
 
 
+handleCommand
+  :: (UserInfoResolver auth, ConsoleRenderer renderer)
+  => HGECommand
+  -> InitContext
+  -> Maybe (HasuraMiddleware RQLQuery)
+  -> auth
+  -> renderer
+  -> IO ()
+handleCommand hgeCmd initCtx metadataMiddleware auth renderConsole =
+  case hgeCmd of
+    HCServe serveOptions ->
+      runHGEServer serveOptions initCtx metadataMiddleware auth renderConsole
+    HCExport -> do
+      res <- runTx' fetchMetadata
+      either printErrJExit printJSON res
+
+    HCClean -> do
+      res <- runTx' cleanCatalog
+      either printErrJExit (const cleanSuccess) res
+
+    HCExecute -> do
+      queryBs <- BL.getContents
+      let sqlGenCtx = SQLGenCtx False
+      res <- runAsAdmin (_icPgPool initCtx) sqlGenCtx $ execQuery queryBs
+      either printErrJExit BLC.putStrLn res
+
+    HCVersion -> putStrLn $ "Hasura GraphQL Engine: " ++ T.unpack currentVersion
+  where
+    runTx' :: Q.TxE QErr a -> IO (Either QErr a)
+    runTx' tx =
+      runExceptT $ Q.runTx (_icPgPool initCtx) (Q.Serializable, Nothing) tx
+
+    cleanSuccess =
+      putStrLn "successfully cleaned graphql-engine related data"
+
+
 runHGEServer
-  :: (UserInfoResolver auth)
+  :: (UserInfoResolver auth, ConsoleRenderer renderer)
   => ServeOptions
   -> InitContext
-  -> auth
   -> Maybe (HasuraMiddleware RQLQuery)
-  -> Maybe ConsoleRenderer
+  -> auth
+  -> renderer
   -> IO ()
-runHGEServer so@ServeOptions{..} InitContext{..} auth metadataMiddleware renderConsole = do
+runHGEServer serveOptions@ServeOptions{..} initCtx@InitContext{..} metadataMiddleware auth renderConsole = do
   let sqlGenCtx = SQLGenCtx soStringifyNum
 
   let Loggers loggerCtx logger _ = _icLoggers
 
   initTime <- Clock.getCurrentTime
   -- log serve options
-  unLogger logger $ serveOptsToLog so
+  unLogger logger $ serveOptsToLog serveOptions
 
   authModeRes <- runExceptT $ flip runReaderT (logger, _icHttpManager) $
                  mkAuthMode soAdminSecret soAuthHook soJwtSecret soUnAuthRole
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
-  (app, cacheRef, cacheInitTime) <-
-    mkWaiApp soTxIso logger sqlGenCtx soEnableAllowlist _icPgPool _icConnInfo
-      _icHttpManager authMode soCorsConfig soEnableConsole soConsoleAssetsDir
-      soEnableTelemetry _icInstanceId soEnabledAPIs soLiveQueryOpts
-      metadataMiddleware renderConsole auth
+  (app, cacheRef, cacheInitTime) <- mkWaiApp logger
+                                             sqlGenCtx
+                                             initCtx
+                                             serveOptions
+                                             authMode
+                                             metadataMiddleware
+                                             auth
+                                             renderConsole
 
   -- log inconsistent schema objects
   inconsObjs <- scInconsistentObjs <$> getSCFromRef cacheRef
@@ -276,43 +296,6 @@ runAsAdmin pool sqlGenCtx m = do
   res  <- runExceptT $ peelRun emptySchemaCache adminUserInfo
           httpManager sqlGenCtx (PGExecCtx pool Q.Serializable) m
   return $ fmap fst res
-
-
-handleCommand
-  :: (UserInfoResolver auth)
-  => HGECommand
-  -> InitContext
-  -> auth
-  -> Maybe (HasuraMiddleware RQLQuery)
-  -> Maybe ConsoleRenderer
-  -> IO ()
-handleCommand hgeCmd initCtx@(InitContext _ pgPool _ _ _ _)
-  auth metadataMiddleware renderConsole =
-
-  case hgeCmd of
-    HCServe so -> runHGEServer so initCtx auth metadataMiddleware renderConsole
-    HCExport -> do
-      res <- runTx' fetchMetadata
-      either printErrJExit printJSON res
-
-    HCClean -> do
-      res <- runTx' cleanCatalog
-      either printErrJExit (const cleanSuccess) res
-
-    HCExecute -> do
-      queryBs <- BL.getContents
-      let sqlGenCtx = SQLGenCtx False
-      res <- runAsAdmin pgPool sqlGenCtx $ execQuery queryBs
-      either printErrJExit BLC.putStrLn res
-
-    HCVersion -> putStrLn $ "Hasura GraphQL Engine: " ++ T.unpack currentVersion
-  where
-    runTx' :: Q.TxE QErr a -> IO (Either QErr a)
-    runTx' tx =
-      runExceptT $ Q.runTx pgPool (Q.Serializable, Nothing) tx
-
-    cleanSuccess =
-      putStrLn "successfully cleaned graphql-engine related data"
 
 
 telemetryNotice :: String

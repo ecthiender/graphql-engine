@@ -1,6 +1,7 @@
-{-# LANGUAGE CPP        #-}
-{-# LANGUAGE DataKinds  #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE CPP             #-}
+{-# LANGUAGE DataKinds       #-}
+{-# LANGUAGE RankNTypes      #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Hasura.Server.App where
 
@@ -322,10 +323,8 @@ mkSpockAction serverCtx auth qErrEncoder qErrModifier apiHandler = do
           mapM_ (mapM_ (uncurry setHeader . unHeader)) h
           lazyBytes b
 
-v1QueryHandler :: Maybe (HasuraMiddleware RQLQuery) -> RQLQuery -> Handler (HttpResponse EncJSON)
-v1QueryHandler metadataMiddleware query = do
-  -- run any given metadata query middleware
-  maybe (return ()) (\m -> m query) metadataMiddleware
+v1QueryHandler :: RQLQuery -> Handler (HttpResponse EncJSON)
+v1QueryHandler query = do
   scRef <- scCacheRef . hcServerCtx <$> ask
   logger <- scLogger . hcServerCtx <$> ask
   res <- bool (fst <$> dbAction) (withSCUpdate scRef logger dbAction) $
@@ -404,6 +403,14 @@ consoleAssetsHandler logger dir path = do
     mimeType = bsToTxt $ defaultMimeLookup fileName
     headers = ("Content-Type", mimeType) : encHeader
 
+class ConsoleRenderer a where
+  renderConsole :: a -> T.Text -> AuthMode -> Bool -> Maybe Text -> Either String Text
+
+data HGEConsole = HGEConsole
+
+instance ConsoleRenderer HGEConsole where
+  renderConsole _ = mkConsoleHTML
+
 mkConsoleHTML :: T.Text -> AuthMode -> Bool -> Maybe Text -> Either String T.Text
 mkConsoleHTML path authMode enableTelemetry consoleAssetsDir =
   renderConsoleHtml consoleTmplt $
@@ -427,10 +434,6 @@ renderConsoleHtml consoleTemplate jVal =
     errMsg = "console template rendering failed: " ++ show errs
     (errs, res) = M.checkedSubstitute consoleTemplate jVal
 
-newtype ConsoleRenderer
-  = ConsoleRenderer
-  { unConsoleRenderer :: T.Text -> AuthMode -> Bool -> Maybe Text -> Either String Text
-  }
 
 newtype QueryParser
   = QueryParser
@@ -458,7 +461,10 @@ legacyQueryHandler
   -> Handler (HttpResponse EncJSON)
 legacyQueryHandler metadataMiddleware tn queryType req =
   case M.lookup queryType queryParsers of
-    Just queryParser -> getQueryParser queryParser qt req >>= v1QueryHandler metadataMiddleware
+    Just queryParser -> do
+      q <- getQueryParser queryParser qt req
+      forM_ metadataMiddleware $ \m -> m q
+      v1QueryHandler q
     Nothing          -> throw404 "No such resource exists"
   where
     qt = QualifiedObject publicSchema tn
@@ -471,34 +477,22 @@ initErrExit e = do
   exitFailure
 
 mkWaiApp
-  :: (UserInfoResolver auth)
-  => Q.TxIsolation
-  -> L.Logger
+  :: (UserInfoResolver auth, ConsoleRenderer renderer)
+  => L.Logger
   -> SQLGenCtx
-  -> Bool
-  -> Q.PGPool
-  -> Q.ConnInfo
-  -> HTTP.Manager
+  -> InitContext
+  -> ServeOptions
   -> AuthMode
-  -> CorsConfig
-  -> Bool
-  -> Maybe Text
-  -> Bool
-  -> InstanceId
-  -> S.HashSet API
-  -> EL.LQOpts
   -> Maybe (HasuraMiddleware RQLQuery)
-  -> Maybe ConsoleRenderer
   -> auth
+  -> renderer
   -> IO (Wai.Application, SchemaCacheRef, Maybe UTCTime)
-mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg
-         enableConsole consoleAssetsDir enableTelemetry instanceId apis
-         lqOpts metadataMiddleware renderConsole auth = do
-    let pgExecCtx = PGExecCtx pool isoLevel
-        pgExecCtxSer = PGExecCtx pool Q.Serializable
+mkWaiApp logger sqlGenCtx InitContext{..} ServeOptions{..} authMode metadataMiddleware auth renderer = do
+    let pgExecCtx = PGExecCtx _icPgPool soTxIso
+        pgExecCtxSer = PGExecCtx _icPgPool Q.Serializable
     (cacheRef, cacheBuiltTime) <- do
       pgResp <- runExceptT $ peelRun emptySchemaCache adminUserInfo
-                httpManager sqlGenCtx pgExecCtxSer $ do
+                _icHttpManager sqlGenCtx pgExecCtxSer $ do
                   buildSchemaCache
                   liftTx fetchLastUpdate
       (time, sc) <- either initErrExit return pgResp
@@ -508,30 +502,36 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg
     cacheLock <- newMVar ()
     planCache <- E.initPlanCache
 
-    let corsPolicy = mkDefaultCorsPolicy corsCfg
+    let corsPolicy = mkDefaultCorsPolicy soCorsConfig
 
-    lqState <- EL.initLiveQueriesState lqOpts pgExecCtx
+    lqState <- EL.initLiveQueriesState soLiveQueryOpts pgExecCtx
     wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState cacheRef
-                   httpManager corsPolicy sqlGenCtx enableAL planCache
+                   _icHttpManager corsPolicy sqlGenCtx soEnableAllowlist planCache
 
     ekgStore <- EKG.newStore
 
     let schemaCacheRef =
           SchemaCacheRef cacheLock cacheRef (E.clearPlanCache planCache)
-        serverCtx = ServerCtx pgExecCtx ci logger
-                    schemaCacheRef mode httpManager
-                    sqlGenCtx apis instanceId planCache
-                    lqState enableAL ekgStore
+        serverCtx = ServerCtx pgExecCtx _icConnInfo logger
+                    schemaCacheRef authMode _icHttpManager
+                    sqlGenCtx soEnabledAPIs _icInstanceId planCache
+                    lqState soEnableAllowlist ekgStore
 
     when (isDeveloperAPIEnabled serverCtx) $ do
       EKG.registerGcMetrics ekgStore
       EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
     spockApp <- spockAsApp $ spockT id $
-                httpApp corsCfg serverCtx enableConsole
-                  consoleAssetsDir enableTelemetry metadataMiddleware renderConsole auth
+                httpApp soCorsConfig
+                        serverCtx
+                        soEnableConsole
+                        soConsoleAssetsDir
+                        soEnableTelemetry
+                        metadataMiddleware
+                        auth
+                        renderer
 
-    let wsServerApp = WS.createWSServerApp mode wsServerEnv
+    let wsServerApp = WS.createWSServerApp authMode wsServerEnv
     return ( WS.websocketsOr WS.defaultConnectionOptions wsServerApp spockApp
            , schemaCacheRef
            , cacheBuiltTime
@@ -541,7 +541,7 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg
     getTimeMs = (round . (* 1000)) `fmap` getPOSIXTime
 
 httpApp
-  :: (UserInfoResolver auth)
+  :: (UserInfoResolver auth, ConsoleRenderer renderer)
   => CorsConfig
   -> ServerCtx
   -> Bool
@@ -550,11 +550,11 @@ httpApp
   -> Maybe (HasuraMiddleware RQLQuery)
   -- ^ The current middleware is only for RQLQuery (metadata) queries, in future
   -- this can be extended to take a `HashMap (HttpMethod, Path) (HasuraMiddleware a)`
-  -> Maybe ConsoleRenderer
   -> auth
+  -> renderer
   -> SpockT IO ()
 httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
-        metadataMiddleware consoleRenderer auth = do
+        metadataMiddleware auth renderer = do
 
     -- cors middleware
     unless (isCorsDisabled corsCfg) $
@@ -577,7 +577,9 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
     when enableMetadata $ do
 
       post "v1/query" $ spockAction encodeQErr id $
-        mkPostHandler $ mkAPIRespHandler (v1QueryHandler metadataMiddleware)
+        mkPostHandler $ mkAPIRespHandler $ \q -> do
+          forM_ metadataMiddleware $ \m -> m q
+          v1QueryHandler q
 
       post ("api/1/table" <//> var <//> var) $ \tableName queryType ->
         mkSpockAction serverCtx auth encodeQErr id $ mkPostHandler $
@@ -668,9 +670,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
       -- serve console html
       get ("console" <//> wildcard) $ \path -> do
         let authMode = scAuthMode serverCtx
-        let consoleHtml = maybe (mkConsoleHTML path authMode enableTelemetry consoleAssetsDir)
-                                (\cr -> unConsoleRenderer cr path authMode enableTelemetry consoleAssetsDir)
-                                consoleRenderer
+        let consoleHtml = renderConsole renderer path authMode enableTelemetry consoleAssetsDir
         either (raiseGenericApiError logger . err500 Unexpected . T.pack) html consoleHtml
 
 raiseGenericApiError :: L.Logger -> QErr -> ActionT IO ()

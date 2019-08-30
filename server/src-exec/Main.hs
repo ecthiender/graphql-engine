@@ -10,5 +10,4 @@ main :: IO ()
 main =  do
   (HGEOptionsG rci hgeCmd) <- parseArgs
   initCtx <- mkInitContext hgeCmd rci HGELogging
-  -- middlewares, logCallback and console renderer are Nothing for OSS HGE operations
-  handleCommand hgeCmd initCtx HGEAuth Nothing Nothing
+  handleCommand hgeCmd initCtx Nothing HGEAuth HGEConsole
