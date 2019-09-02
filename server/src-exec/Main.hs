@@ -2,7 +2,6 @@ module Main where
 
 import           Hasura.App
 import           Hasura.Logging     (HGELogging (..))
-import           Hasura.Prelude
 import           Hasura.Server.App
 import           Hasura.Server.Init
 

@@ -20,6 +20,7 @@ import qualified Data.Yaml                  as Y
 import qualified Network.HTTP.Client        as HTTP
 import qualified Network.HTTP.Client.TLS    as HTTP
 import qualified Network.Wai.Handler.Warp   as Warp
+import qualified System.Posix.Signals       as Signals
 
 import           Hasura.App.Migrate         (migrateCatalog)
 import           Hasura.App.Ops
@@ -243,7 +244,11 @@ runHGEServer serveOptions@ServeOptions{..} initCtx@InitContext{..} metadataMiddl
   startSchemaSync sqlGenCtx _icPgPool logger _icHttpManager cacheRef
     _icInstanceId cacheInitTime
 
-  let warpSettings = Warp.setPort soPort $ Warp.setHost soHost Warp.defaultSettings
+  let warpSettings = Warp.setPort soPort
+                     . Warp.setHost soHost
+                     . Warp.setGracefulShutdownTimeout (Just 30) -- 30s graceful shutdown
+                     . Warp.setInstallShutdownHandler (shutdownHandler logger)
+                     $ Warp.defaultSettings
 
   maxEvThrds <- getFromEnv defaultMaxEventThreads "HASURA_GRAPHQL_EVENTS_HTTP_POOL_SIZE"
   evFetchMilliSec <- getFromEnv defaultFetchIntervalMilliSec "HASURA_GRAPHQL_EVENTS_FETCH_INTERVAL"
@@ -288,6 +293,18 @@ runHGEServer serveOptions@ServeOptions{..} initCtx@InitContext{..} metadataMiddl
 
     runTx pool tx =
       runExceptT $ Q.runTx pool (Q.Serializable, Nothing) tx
+
+    -- | Catches the SIGTERM signal and initiates a graceful shutdown. Graceful shutdown for regular HTTP
+    -- requests is already implemented in Warp, and is triggered by invoking the 'closeSocket' callback.
+    -- We only catch the SIGTERM signal once, that is, if the user hits CTRL-C once again, we terminate
+    -- the process immediately.
+    shutdownHandler :: Logger -> IO () -> IO ()
+    shutdownHandler  (Logger logger) closeSocket =
+      void $ Signals.installHandler Signals.sigTERM (Signals.CatchOnce $ closeSocket >> logShutdown) Nothing
+     where
+      logShutdown = logger $
+        mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
+
 
 
 runAsAdmin :: Q.PGPool -> SQLGenCtx -> Run a -> IO (Either QErr a)
