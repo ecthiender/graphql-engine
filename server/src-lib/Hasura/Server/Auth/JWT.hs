@@ -10,10 +10,10 @@ module Hasura.Server.Auth.JWT
   , defaultClaimNs
   ) where
 
-import           Control.Arrow                   (first)
 import           Control.Exception               (try)
 import           Control.Lens
 import           Control.Monad                   (when)
+import           Data.Has
 import           Data.IORef                      (IORef, modifyIORef, readIORef)
 
 import           Data.List                       (find)
@@ -107,18 +107,22 @@ computeDiffTime t =
 
 -- | create a background thread to refresh the JWK
 jwkRefreshCtrl
-  :: (MonadIO m)
-  => Logger
-  -> HTTP.Manager
-  -> URI
+  :: ( MonadIO m
+     , Has Logger r
+     , Has HTTP.Manager r
+     , MonadReader r m
+     )
+  => URI
   -> IORef Jose.JWKSet
   -> NominalDiffTime
   -> m ()
-jwkRefreshCtrl lggr mngr url ref time =
+jwkRefreshCtrl url ref time = do
+  logger <- asks getter
+  manager <- asks getter
   void $ liftIO $ C.forkIO $ do
     C.threadDelay $ diffTimeToMicro time
     forever $ do
-      res <- runExceptT $ updateJwkRef lggr mngr url ref
+      res <- runExceptT $ updateJwkRef logger manager url ref
       mTime <- either (const $ return Nothing) return res
       -- if can't parse time from header, defaults to 1 min
       let delay = maybe (60 * aSecond) computeDiffTime mTime
@@ -130,7 +134,8 @@ jwkRefreshCtrl lggr mngr url ref time =
 -- | Given a JWK url, fetch JWK from it and update the IORef
 updateJwkRef
   :: ( MonadIO m
-     , MonadError T.Text m)
+     , MonadError T.Text m
+     )
   => Logger
   -> HTTP.Manager
   -> URI

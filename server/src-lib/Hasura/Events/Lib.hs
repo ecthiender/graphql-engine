@@ -56,7 +56,7 @@ newtype EventInternalErr
   deriving (Show, Eq)
 
 instance L.ToEngineLog EventInternalErr where
-  toEngineLog (EventInternalErr qerr) = (L.LevelError, L.ELTEventTrigger, toJSON qerr )
+  toEngineLog (EventInternalErr qerr) = (L.LevelError, L.eventTriggerLogType, toJSON qerr )
 
 data TriggerMeta
   = TriggerMeta { tmName :: TriggerName }
@@ -171,29 +171,28 @@ initEventEngineCtx maxT fetchI = do
   return $ EventEngineCtx q c maxT fetchI
 
 processEventQueue
-  :: L.LoggerCtx -> LogEnvHeaders -> HTTP.Manager-> Q.PGPool
+  :: L.Logger -> LogEnvHeaders -> HTTP.Manager-> Q.PGPool
   -> IORef (SchemaCache, SchemaCacheVer) -> EventEngineCtx
   -> IO ()
-processEventQueue logctx logenv httpMgr pool cacheRef eectx = do
+processEventQueue logger logenv httpMgr pool cacheRef eectx = do
   threads <- mapM async [fetchThread, consumeThread]
   void $ waitAny threads
   where
-    fetchThread = pushEvents (mkHLogger logctx) pool eectx
-    consumeThread = consumeEvents (mkHLogger logctx)
+    fetchThread = pushEvents logger pool eectx
+    consumeThread = consumeEvents logger
                     logenv httpMgr pool (CacheRef cacheRef) eectx
 
-pushEvents
-  :: HLogger -> Q.PGPool -> EventEngineCtx -> IO ()
-pushEvents logger pool eectx  = forever $ do
+pushEvents :: Logger -> Q.PGPool -> EventEngineCtx -> IO ()
+pushEvents (Logger logger) pool eectx  = forever $ do
   let EventEngineCtx q _ _ fetchI = eectx
   eventsOrError <- runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) fetchEvents
   case eventsOrError of
-    Left err     -> logger $ L.toEngineLog $ EventInternalErr err
+    Left err     -> logger $ EventInternalErr err
     Right events -> atomically $ mapM_ (TQ.writeTQueue q) events
   threadDelay (fetchI * 1000)
 
 consumeEvents
-  :: HLogger -> LogEnvHeaders -> HTTP.Manager -> Q.PGPool -> CacheRef -> EventEngineCtx
+  :: Logger -> LogEnvHeaders -> HTTP.Manager -> Q.PGPool -> CacheRef -> EventEngineCtx
   -> IO ()
 consumeEvents logger logenv httpMgr pool cacheRef eectx  = forever $ do
   event <- atomically $ do
@@ -205,7 +204,7 @@ processEvent
   :: ( MonadReader r m
      , MonadIO m
      , Has HTTP.Manager r
-     , Has HLogger r
+     , Has Logger r
      , Has CacheRef r
      , Has EventEngineCtx r
      )
@@ -262,7 +261,7 @@ processSuccess pool e decodedHeaders ep resp = do
 processError
   :: ( MonadIO m
      , MonadReader r m
-     , Has HLogger r
+     , Has Logger r
      )
   => Q.PGPool -> Event -> RetryConf -> [HeaderConf] -> EventPayload -> HTTPErr
   -> m (Either QErr ())
@@ -378,22 +377,22 @@ mkMaybe :: [a] -> Maybe [a]
 mkMaybe [] = Nothing
 mkMaybe x  = Just x
 
-logQErr :: ( MonadReader r m, MonadIO m,  Has HLogger r) => QErr -> m ()
+logQErr :: ( MonadReader r m, MonadIO m,  Has Logger r) => QErr -> m ()
 logQErr err = do
-  logger <- asks getter
-  liftIO $ logger $ L.toEngineLog $ EventInternalErr err
+  L.Logger logger <- asks getter
+  liftIO $ logger $ EventInternalErr err
 
-logHTTPErr :: ( MonadReader r m, MonadIO m,  Has HLogger r) => HTTPErr -> m ()
+logHTTPErr :: ( MonadReader r m, MonadIO m,  Has Logger r) => HTTPErr -> m ()
 logHTTPErr err = do
-  logger <- asks getter
-  liftIO $ logger $ L.toEngineLog err
+  L.Logger logger <- asks getter
+  liftIO $ logger err
 
 tryWebhook
   :: ( MonadReader r m
      , MonadIO m
      , MonadError HTTPErr m
      , Has HTTP.Manager r
-     , Has HLogger r
+     , Has Logger r
      , Has EventEngineCtx r
      )
   => [HTTP.Header] -> HTTP.ResponseTimeout -> EventPayload -> String
@@ -432,7 +431,7 @@ tryWebhook headers responseTimeout ep webhook = do
 getEventTriggerInfoFromEvent :: SchemaCache -> Event -> Maybe EventTriggerInfo
 getEventTriggerInfoFromEvent sc e = let table = eTable e
                                         tableInfo = M.lookup table $ scTables sc
-                                    in M.lookup ( tmName $ eTrigger e) =<< (tiEventTriggerInfoMap <$> tableInfo)
+                                    in M.lookup ( tmName $ eTrigger e) =<< (_tiEventTriggerInfoMap <$> tableInfo)
 
 fetchEvents :: Q.TxE QErr [Event]
 fetchEvents =
@@ -501,6 +500,7 @@ unlockAllEvents =
   Q.unitQE defaultTxErrorHandler [Q.sql|
           UPDATE hdb_catalog.event_log
           SET locked = 'f'
+          WHERE locked = 't'
           |] () False
 
 toInt64 :: (Integral a) => a -> Int64

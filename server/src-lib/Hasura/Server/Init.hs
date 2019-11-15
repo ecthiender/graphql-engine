@@ -16,6 +16,7 @@ import qualified Data.String                      as DataString
 import qualified Data.Text                        as T
 import qualified Hasura.GraphQL.Execute.LiveQuery as LQ
 import qualified Hasura.Logging                   as L
+import qualified Network.HTTP.Client              as HTTP
 import qualified Text.PrettyPrint.ANSI.Leijen     as PP
 
 import           Hasura.Prelude
@@ -26,6 +27,10 @@ import           Hasura.Server.Auth
 import           Hasura.Server.Cors
 import           Hasura.Server.Logging
 import           Hasura.Server.Utils
+
+newtype DbUid
+  = DbUid { getDbUid :: Text }
+  deriving (Show, Eq, J.ToJSON, J.FromJSON)
 
 newtype InstanceId
   = InstanceId { getInstanceId :: Text }
@@ -141,6 +146,25 @@ data HGEOptionsG a
 
 type RawHGEOptions = HGEOptionsG RawServeOptions
 type HGEOptions = HGEOptionsG ServeOptions
+
+-- | Bunch of resources required to initialize the server
+data InitContext
+  = InitContext
+  { _icConnInfo    :: !Q.ConnInfo
+  , _icPgPool      :: !Q.PGPool
+  , _icInstanceId  :: !InstanceId
+  , _icDbUid       :: !Text
+  , _icHttpManager :: !HTTP.Manager
+  , _icLoggers     :: !Loggers
+  }
+
+-- | Collection of the LoggerCtx, the regular Logger and the PGLogger
+data Loggers
+  = Loggers
+  { _loggersLoggerCtx :: !L.LoggerCtx
+  , _loggersLogger    :: !L.Logger
+  , _loggersPgLogger  :: !Q.PGLogger
+  }
 
 type Env = [(String, String)]
 
@@ -656,11 +680,11 @@ connInfoErrModifier :: String -> String
 connInfoErrModifier s = "Fatal Error : " ++ s
 
 mkConnInfo ::RawConnInfo -> Either String Q.ConnInfo
-mkConnInfo (RawConnInfo mHost mPort mUser pass mURL mDB opts mRetries) =
+mkConnInfo (RawConnInfo mHost mPort mUser password mURL mDB opts mRetries) =
   case (mHost, mPort, mUser, mDB, mURL) of
 
     (Just host, Just port, Just user, Just db, Nothing) ->
-      return $ Q.ConnInfo host port user pass db opts retries
+      return $ Q.ConnInfo host port user password db opts retries
 
     (_, _, _, _, Just dbURL) -> maybe (throwError invalidUrlMsg)
                                 withRetries $ parseDatabaseUrl dbURL opts

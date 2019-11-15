@@ -1,6 +1,7 @@
-{-# LANGUAGE CPP        #-}
-{-# LANGUAGE DataKinds  #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE CPP             #-}
+{-# LANGUAGE DataKinds       #-}
+{-# LANGUAGE RankNTypes      #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Hasura.Server.App where
 
@@ -45,7 +46,7 @@ import qualified Hasura.Server.PGDump                   as PGD
 
 import           Hasura.EncJSON
 import           Hasura.Prelude                         hiding (get, put)
-import           Hasura.RQL.DDL.Schema.Table
+import           Hasura.RQL.DDL.Schema
 import           Hasura.RQL.Types
 import           Hasura.Server.Auth                     (AuthMode (..),
                                                          getUserInfo)
@@ -133,6 +134,11 @@ data HandlerCtx
 
 type Handler = ExceptT QErr (ReaderT HandlerCtx IO)
 
+type HasuraMiddleware a = a -> Handler ()
+
+type UserAuthMiddleware =
+  L.Logger -> HTTP.Manager -> [N.Header] -> AuthMode -> ExceptT QErr IO UserInfo
+
 data APIResp
   = JSONResp !(HttpResponse EncJSON)
   | RawResp  !(HttpResponse BL.ByteString)
@@ -145,6 +151,7 @@ apiRespToLBS = \case
 data APIHandler a
   = AHGet !(Handler APIResp)
   | AHPost !(a -> Handler APIResp)
+
 
 mkGetHandler :: Handler APIResp -> APIHandler ()
 mkGetHandler = AHGet
@@ -176,6 +183,7 @@ parseBody reqBody =
   case eitherDecode' reqBody of
     Left e     -> throw400 InvalidJSON (T.pack e)
     Right jVal -> decodeValue jVal
+
 
 onlyAdmin :: Handler ()
 onlyAdmin = do
@@ -226,18 +234,33 @@ logError
   -> RequestId
   -> Wai.Request
   -> Maybe Value
-  -> QErr -> m ()
+  -> QErr
+  -> m ()
 logError logger userInfoM reqId httpReq req qErr =
   liftIO $ L.unLogger logger $ mkHttpErrorLog userInfoM reqId httpReq qErr req Nothing
 
+
+class UserInfoResolver auth where
+  resolveUserInfo
+    :: (MonadIO m, MonadError QErr m)
+    => auth -> L.Logger -> HTTP.Manager -> [N.Header] -> AuthMode -> m UserInfo
+
+data HGEAuth = HGEAuth
+
+instance UserInfoResolver HGEAuth where
+  resolveUserInfo _ = getUserInfo
+
 mkSpockAction
-  :: (MonadIO m, FromJSON a, ToJSON a)
-  => (Bool -> QErr -> Value)
+  :: (MonadIO m, FromJSON a, ToJSON a, UserInfoResolver auth)
+  => ServerCtx
+  -> auth
+  -> (Bool -> QErr -> Value)
+  -- ^ `QErr` JSON encoder function
   -> (QErr -> QErr)
-  -> ServerCtx
+  -- ^ `QErr` modifier
   -> APIHandler a
   -> ActionT m ()
-mkSpockAction qErrEncoder qErrModifier serverCtx apiHandler = do
+mkSpockAction serverCtx auth qErrEncoder qErrModifier apiHandler = do
   req <- request
   reqBody <- liftIO $ strictRequestBody req
   let headers = requestHeaders req
@@ -247,7 +270,7 @@ mkSpockAction qErrEncoder qErrModifier serverCtx apiHandler = do
       reqTxt = Just $ String $ bsToTxt $ BL.toStrict reqBody
 
   requestId <- getRequestId headers
-  userInfoE <- liftIO $ runExceptT $ getUserInfo logger manager headers authMode
+  userInfoE <- liftIO $ runExceptT $ resolveUserInfo auth logger manager headers authMode
   userInfo  <- either (logErrorAndResp Nothing requestId req reqTxt False . qErrModifier)
                return userInfoE
 
@@ -380,23 +403,36 @@ consoleAssetsHandler logger dir path = do
     mimeType = bsToTxt $ defaultMimeLookup fileName
     headers = ("Content-Type", mimeType) : encHeader
 
+class ConsoleRenderer a where
+  renderConsole :: a -> T.Text -> AuthMode -> Bool -> Maybe Text -> Either String Text
+
+data HGEConsole = HGEConsole
+
+instance ConsoleRenderer HGEConsole where
+  renderConsole _ = mkConsoleHTML
+
 mkConsoleHTML :: T.Text -> AuthMode -> Bool -> Maybe Text -> Either String T.Text
 mkConsoleHTML path authMode enableTelemetry consoleAssetsDir =
-  bool (Left errMsg) (Right res) $ null errs
-  where
-    (errs, res) = M.checkedSubstitute consoleTmplt $
-      -- variables required to render the template
-      object [ "isAdminSecretSet" .= isAdminSecretSet authMode
-             , "consolePath" .= consolePath
-             , "enableTelemetry" .= boolToText enableTelemetry
-             , "cdnAssets" .= boolToText (isNothing consoleAssetsDir)
-             , "assetsVersion" .= consoleVersion
-             , "serverVersion" .= currentVersion
-             ]
+  renderConsoleHtml consoleTmplt $
+    -- variables required to render the template
+    object [ "isAdminSecretSet" .= isAdminSecretSet authMode
+           , "consolePath" .= consolePath
+           , "enableTelemetry" .= boolToText enableTelemetry
+           , "cdnAssets" .= boolToText (isNothing consoleAssetsDir)
+           , "assetsVersion" .= consoleVersion
+           , "serverVersion" .= currentVersion
+           ]
+   where
     consolePath = case path of
       "" -> "/console"
       r  -> "/console/" <> r
+
+renderConsoleHtml :: M.Template -> Value -> Either String Text
+renderConsoleHtml consoleTemplate jVal =
+  bool (Left errMsg) (Right res) $ null errs
+  where
     errMsg = "console template rendering failed: " ++ show errs
+    (errs, res) = M.checkedSubstitute consoleTemplate jVal
 
 
 newtype QueryParser
@@ -419,11 +455,16 @@ queryParsers =
       q <- decodeValue val
       return $ f q
 
-legacyQueryHandler :: TableName -> T.Text -> Object
-                   -> Handler (HttpResponse EncJSON)
-legacyQueryHandler tn queryType req =
+legacyQueryHandler
+  :: Maybe (HasuraMiddleware RQLQuery)
+  -> TableName -> T.Text -> Object
+  -> Handler (HttpResponse EncJSON)
+legacyQueryHandler metadataMiddleware tn queryType req =
   case M.lookup queryType queryParsers of
-    Just queryParser -> getQueryParser queryParser qt req >>= v1QueryHandler
+    Just queryParser -> do
+      q <- getQueryParser queryParser qt req
+      forM_ metadataMiddleware $ \m -> m q
+      v1QueryHandler q
     Nothing          -> throw404 "No such resource exists"
   where
     qt = QualifiedObject publicSchema tn
@@ -436,30 +477,22 @@ initErrExit e = do
   exitFailure
 
 mkWaiApp
-  :: Q.TxIsolation
-  -> L.LoggerCtx
+  :: (UserInfoResolver auth, ConsoleRenderer renderer)
+  => L.Logger
   -> SQLGenCtx
-  -> Bool
-  -> Q.PGPool
-  -> Q.ConnInfo
-  -> HTTP.Manager
+  -> InitContext
+  -> ServeOptions
   -> AuthMode
-  -> CorsConfig
-  -> Bool
-  -> Maybe Text
-  -> Bool
-  -> InstanceId
-  -> S.HashSet API
-  -> EL.LQOpts
+  -> Maybe (HasuraMiddleware RQLQuery)
+  -> auth
+  -> renderer
   -> IO (Wai.Application, SchemaCacheRef, Maybe UTCTime)
-mkWaiApp isoLevel loggerCtx sqlGenCtx enableAL pool ci httpManager mode corsCfg
-         enableConsole consoleAssetsDir enableTelemetry instanceId apis lqOpts = do
-
-    let pgExecCtx = PGExecCtx pool isoLevel
-        pgExecCtxSer = PGExecCtx pool Q.Serializable
+mkWaiApp logger sqlGenCtx InitContext{..} ServeOptions{..} authMode metadataMiddleware auth renderer = do
+    let pgExecCtx = PGExecCtx _icPgPool soTxIso
+        pgExecCtxSer = PGExecCtx _icPgPool Q.Serializable
     (cacheRef, cacheBuiltTime) <- do
       pgResp <- runExceptT $ peelRun emptySchemaCache adminUserInfo
-                httpManager sqlGenCtx pgExecCtxSer $ do
+                _icHttpManager sqlGenCtx pgExecCtxSer $ do
                   buildSchemaCache
                   liftTx fetchLastUpdate
       (time, sc) <- either initErrExit return pgResp
@@ -469,31 +502,36 @@ mkWaiApp isoLevel loggerCtx sqlGenCtx enableAL pool ci httpManager mode corsCfg
     cacheLock <- newMVar ()
     planCache <- E.initPlanCache
 
-    let corsPolicy = mkDefaultCorsPolicy corsCfg
-        logger = L.mkLogger loggerCtx
+    let corsPolicy = mkDefaultCorsPolicy soCorsConfig
 
-    lqState <- EL.initLiveQueriesState lqOpts pgExecCtx
+    lqState <- EL.initLiveQueriesState soLiveQueryOpts pgExecCtx
     wsServerEnv <- WS.createWSServerEnv logger pgExecCtx lqState cacheRef
-                   httpManager corsPolicy sqlGenCtx enableAL planCache
+                   _icHttpManager corsPolicy sqlGenCtx soEnableAllowlist planCache
 
     ekgStore <- EKG.newStore
 
     let schemaCacheRef =
           SchemaCacheRef cacheLock cacheRef (E.clearPlanCache planCache)
-        serverCtx = ServerCtx pgExecCtx ci logger
-                    schemaCacheRef mode httpManager
-                    sqlGenCtx apis instanceId planCache
-                    lqState enableAL ekgStore
+        serverCtx = ServerCtx pgExecCtx _icConnInfo logger
+                    schemaCacheRef authMode _icHttpManager
+                    sqlGenCtx soEnabledAPIs _icInstanceId planCache
+                    lqState soEnableAllowlist ekgStore
 
     when (isDeveloperAPIEnabled serverCtx) $ do
       EKG.registerGcMetrics ekgStore
       EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
 
     spockApp <- spockAsApp $ spockT id $
-                httpApp corsCfg serverCtx enableConsole
-                  consoleAssetsDir enableTelemetry
+                httpApp soCorsConfig
+                        serverCtx
+                        soEnableConsole
+                        soConsoleAssetsDir
+                        soEnableTelemetry
+                        metadataMiddleware
+                        auth
+                        renderer
 
-    let wsServerApp = WS.createWSServerApp mode wsServerEnv
+    let wsServerApp = WS.createWSServerApp authMode wsServerEnv
     return ( WS.websocketsOr WS.defaultConnectionOptions wsServerApp spockApp
            , schemaCacheRef
            , cacheBuiltTime
@@ -502,8 +540,22 @@ mkWaiApp isoLevel loggerCtx sqlGenCtx enableAL pool ci httpManager mode corsCfg
     getTimeMs :: IO Int64
     getTimeMs = (round . (* 1000)) `fmap` getPOSIXTime
 
-httpApp :: CorsConfig -> ServerCtx -> Bool -> Maybe Text -> Bool -> SpockT IO ()
-httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
+httpApp
+  :: (UserInfoResolver auth, ConsoleRenderer renderer)
+  => CorsConfig
+  -> ServerCtx
+  -> Bool
+  -> Maybe Text
+  -> Bool
+  -> Maybe (HasuraMiddleware RQLQuery)
+  -- ^ The current middleware is only for RQLQuery (metadata) queries, in future
+  -- this can be extended to take a `HashMap (HttpMethod, Path) (HasuraMiddleware a)`
+  -> auth
+  -> renderer
+  -> SpockT IO ()
+httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
+        metadataMiddleware auth renderer = do
+
     -- cors middleware
     unless (isCorsDisabled corsCfg) $
       middleware $ corsMiddleware (mkDefaultCorsPolicy corsCfg)
@@ -524,19 +576,21 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
 
     when enableMetadata $ do
 
-      post "v1/query" $ mkSpockAction encodeQErr id serverCtx $
-        mkPostHandler $ mkAPIRespHandler v1QueryHandler
+      post "v1/query" $ spockAction encodeQErr id $
+        mkPostHandler $ mkAPIRespHandler $ \q -> do
+          forM_ metadataMiddleware $ \m -> m q
+          v1QueryHandler q
 
       post ("api/1/table" <//> var <//> var) $ \tableName queryType ->
-        mkSpockAction encodeQErr id serverCtx $ mkPostHandler $
-          mkAPIRespHandler $ legacyQueryHandler (TableName tableName) queryType
+        mkSpockAction serverCtx auth encodeQErr id $ mkPostHandler $
+          mkAPIRespHandler $ legacyQueryHandler metadataMiddleware (TableName tableName) queryType
 
     when enablePGDump $
-      post "v1alpha1/pg_dump" $ mkSpockAction encodeQErr id serverCtx $
+      post "v1alpha1/pg_dump" $ spockAction encodeQErr id $
         mkPostHandler v1Alpha1PGDumpHandler
 
     when enableConfig $
-      get "v1alpha1/config" $ mkSpockAction encodeQErr id serverCtx $
+      get "v1alpha1/config" $ spockAction encodeQErr id $
         mkGetHandler $ do
           onlyAdmin
           let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
@@ -545,31 +599,31 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
     when enableGraphQL $ do
       post "v1alpha1/graphql/explain" gqlExplainAction
 
-      post "v1alpha1/graphql" $ mkSpockAction GH.encodeGQErr id serverCtx $
+      post "v1alpha1/graphql" $ spockAction GH.encodeGQErr id $
         mkPostHandler $ mkAPIRespHandler v1Alpha1GQHandler
 
       post "v1/graphql/explain" gqlExplainAction
 
-      post "v1/graphql" $ mkSpockAction GH.encodeGQErr allMod200 serverCtx $
+      post "v1/graphql" $ spockAction GH.encodeGQErr allMod200 $
         mkPostHandler $ mkAPIRespHandler v1GQHandler
 
     when (isDeveloperAPIEnabled serverCtx) $ do
-      get "dev/ekg" $ mkSpockAction encodeQErr id serverCtx $
+      get "dev/ekg" $ spockAction encodeQErr id $
         mkGetHandler $ do
           onlyAdmin
           respJ <- liftIO $ EKG.sampleAll $ scEkgStore serverCtx
           return $ JSONResp $ HttpResponse (encJFromJValue $ EKG.sampleToJson respJ) Nothing
-      get "dev/plan_cache" $ mkSpockAction encodeQErr id serverCtx $
+      get "dev/plan_cache" $ spockAction encodeQErr id $
         mkGetHandler $ do
           onlyAdmin
           respJ <- liftIO $ E.dumpPlanCache $ scPlanCache serverCtx
           return $ JSONResp $ HttpResponse (encJFromJValue respJ) Nothing
-      get "dev/subscriptions" $ mkSpockAction encodeQErr id serverCtx $
+      get "dev/subscriptions" $ spockAction encodeQErr id $
         mkGetHandler $ do
           onlyAdmin
           respJ <- liftIO $ EL.dumpLiveQueriesState False $ scLQState serverCtx
           return $ JSONResp $ HttpResponse (encJFromJValue respJ) Nothing
-      get "dev/subscriptions/extended" $ mkSpockAction encodeQErr id serverCtx $
+      get "dev/subscriptions/extended" $ spockAction encodeQErr id $
         mkGetHandler $ do
           onlyAdmin
           respJ <- liftIO $ EL.dumpLiveQueriesState True $ scLQState serverCtx
@@ -582,11 +636,21 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
   where
     logger = scLogger serverCtx
 
+    spockAction
+      :: (FromJSON a, ToJSON a)
+      => (Bool -> QErr -> Value)
+      -- ^ A function to encode QErr
+      -> (QErr -> QErr)
+      -- ^ Function to modify QErr
+      -> APIHandler a
+      -> ActionT IO ()
+    spockAction = mkSpockAction serverCtx auth
+
     -- all graphql errors should be of type 200
     allMod200 qe = qe { qeStatus = N.status200 }
 
     gqlExplainAction =
-      mkSpockAction encodeQErr id serverCtx $ mkPostHandler $
+      spockAction encodeQErr id $ mkPostHandler $
         mkAPIRespHandler gqlExplainHandler
 
     enableGraphQL = isGraphQLEnabled serverCtx
@@ -604,9 +668,10 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
           consoleAssetsHandler logger dir (T.unpack path)
 
       -- serve console html
-      get ("console" <//> wildcard) $ \path ->
-        either (raiseGenericApiError logger . err500 Unexpected . T.pack) html $
-        mkConsoleHTML path (scAuthMode serverCtx) enableTelemetry consoleAssetsDir
+      get ("console" <//> wildcard) $ \path -> do
+        let authMode = scAuthMode serverCtx
+        let consoleHtml = renderConsole renderer path authMode enableTelemetry consoleAssetsDir
+        either (raiseGenericApiError logger . err500 Unexpected . T.pack) html consoleHtml
 
 raiseGenericApiError :: L.Logger -> QErr -> ActionT IO ()
 raiseGenericApiError logger qErr = do
