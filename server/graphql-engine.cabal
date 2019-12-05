@@ -203,6 +203,7 @@ library
 
                      , Hasura.RQL.Types
                      , Hasura.RQL.DDL.Metadata
+                     , Hasura.RQL.DDL.Schema
                      , Hasura.EncJSON
 
   other-modules:       Hasura.Cache
@@ -245,7 +246,6 @@ library
                      , Hasura.RQL.DDL.Permission
                      , Hasura.RQL.DDL.Relationship.Rename
                      , Hasura.RQL.DDL.Relationship.Types
-                     , Hasura.RQL.DDL.Schema
                      , Hasura.RQL.DDL.Schema.Cache
                      , Hasura.RQL.DDL.Schema.Catalog
                      , Hasura.RQL.DDL.Schema.Diff
