@@ -62,6 +62,7 @@ import           Hasura.RQL.Types.RemoteSchema  as R
 import           Hasura.RQL.Types.SchemaCache   as R
 
 import qualified Hasura.GraphQL.Context         as GC
+import qualified Hasura.GraphQL.Schema.Default  as GD
 
 import qualified Data.HashMap.Strict            as M
 import qualified Data.Text                      as T

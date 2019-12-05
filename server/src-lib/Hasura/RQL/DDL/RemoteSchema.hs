@@ -115,7 +115,7 @@ runReloadRemoteSchema (RemoteSchemaNameQuery name) = do
 
 -- | build GraphQL schema
 buildGCtxMap
-  :: (QErrM m, CacheRWM m) => m ()
+  :: (QErrM m, CacheRWM m, GS.DefaultRolesSchema m) => m ()
 buildGCtxMap = do
   -- build GraphQL Context with Hasura schema
   GS.buildGCtxMapPG

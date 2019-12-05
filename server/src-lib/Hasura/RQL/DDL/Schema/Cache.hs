@@ -52,7 +52,7 @@ import           Hasura.RQL.Types.QueryCollection
 import           Hasura.SQL.Types
 
 type CacheBuildM m
-  = (CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m)
+  = (CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m, GS.DefaultRolesSchema m)
 
 buildSchemaCache :: (CacheBuildM m) => m ()
 buildSchemaCache = buildSchemaCacheWithOptions True

@@ -15,6 +15,9 @@ module Hasura.GraphQL.Schema
 
   , checkConflictingNode
   , checkSchemaConflicts
+
+  , DefaultRolesSchema (..)
+  , mkAdminSchema
   ) where
 
 import           Control.Lens.Extended                 hiding (op)
@@ -28,6 +31,7 @@ import qualified Language.GraphQL.Draft.Syntax         as G
 
 import           Hasura.GraphQL.Context
 import           Hasura.GraphQL.Resolve.Types
+import           Hasura.GraphQL.Schema.Default
 import           Hasura.GraphQL.Validate.Types
 import           Hasura.Prelude
 import           Hasura.RQL.DML.Internal               (mkAdminRolePermInfo)
@@ -661,8 +665,36 @@ getRootFldsRole tn pCols constraints fields funcs viM (RolePermInfo insM selM up
 
     allCols = getCols fields
 
+-- this function should not be used directly. Use 'generateDefaultRolesSchema'
+mkAdminSchema
+  :: MonadError QErr m
+  => TableInfo PGColumnInfo
+  -> TableCache PGColumnInfo
+  -> [PGColumnInfo]
+  -- ^ cols
+  -> [PGColumnInfo]
+  -- ^ primary key cols info
+  -> [ConstraintName]
+  -> [FunctionInfo]
+  -> m (Map.HashMap RoleName (TyAgg, RootFields, Map.HashMap QualifiedTable InsCtx))
+mkAdminSchema tabInfo tableCache cols pkeyColInfos validConstraints tabFuncs = do
+  adminInsCtx <- mkAdminInsCtx tn tableCache fields
+  adminSelFlds <- mkAdminSelFlds fields tableCache
+  let adminCtx = mkGCtxRole' tn descM (Just (cols, icRelations adminInsCtx))
+                 (Just (True, adminSelFlds)) (Just cols) (Just ())
+                 pkeyColInfos validConstraints viewInfo tabFuncs
+      adminInsCtxMap = Map.singleton tn adminInsCtx
+  return $ Map.fromList [(adminRole, (adminCtx, adminRootFlds, adminInsCtxMap))]
+  where
+    TableInfo tn descM _ fields _ _ _ viewInfo _ _ customConfig = tabInfo
+    adminRootFlds =
+      getRootFldsRole' tn pkeyColInfos validConstraints fields tabFuncs
+      (Just ([], True)) (Just (noFilter, Nothing, [], True))
+      (Just (cols, mempty, noFilter, [])) (Just (noFilter, []))
+      viewInfo customConfig
+
 mkGCtxMapTable
-  :: (MonadError QErr m)
+  :: (MonadError QErr m, DefaultRolesSchema m)
   => TableCache PGColumnInfo
   -> FunctionCache
   -> TableInfo PGColumnInfo
@@ -671,13 +703,8 @@ mkGCtxMapTable tableCache funcCache tabInfo = do
   m <- flip Map.traverseWithKey rolePerms $
        mkGCtxRole tableCache tn descM fields pkeyColInfos validConstraints
                   tabFuncs viewInfo customConfig
-  adminInsCtx <- mkAdminInsCtx tn tableCache fields
-  adminSelFlds <- mkAdminSelFlds fields tableCache
-  let adminCtx = mkGCtxRole' tn descM (Just (cols, icRelations adminInsCtx))
-                 (Just (True, adminSelFlds)) (Just cols) (Just ())
-                 pkeyColInfos validConstraints viewInfo tabFuncs
-      adminInsCtxMap = Map.singleton tn adminInsCtx
-  return $ Map.insert adminRole (adminCtx, adminRootFlds, adminInsCtxMap) m
+  defaultMap <- generateDefaultRolesSchema tabInfo tableCache cols pkeyColInfos validConstraints tabFuncs
+  return $ Map.union m defaultMap
   where
     TableInfo tn descM _ fields rolePerms constraints
               pkeyCols viewInfo _ _ customConfig = tabInfo
@@ -687,17 +714,12 @@ mkGCtxMapTable tableCache funcCache tabInfo = do
     pkeyColInfos = getColInfos pkeyCols colInfos
     tabFuncs = filter (isValidObjectName . fiName) $
                getFuncsOfTable tn funcCache
-    adminRootFlds =
-      getRootFldsRole' tn pkeyColInfos validConstraints fields tabFuncs
-      (Just ([], True)) (Just (noFilter, Nothing, [], True))
-      (Just (cols, mempty, noFilter, [])) (Just (noFilter, []))
-      viewInfo customConfig
 
 noFilter :: AnnBoolExpPartialSQL
 noFilter = annBoolExpTrue
 
 mkGCtxMap
-  :: forall m. (MonadError QErr m)
+  :: forall m. (MonadError QErr m, DefaultRolesSchema m)
   => TableCache PGColumnInfo -> FunctionCache -> m GCtxMap
 mkGCtxMap tableCache functionCache = do
   typesMapL <- mapM (mkGCtxMapTable tableCache functionCache) $
@@ -738,7 +760,7 @@ mkGCtxMap tableCache functionCache = do
 
 -- | build GraphQL schema from postgres tables and functions
 buildGCtxMapPG
-  :: (QErrM m, CacheRWM m)
+  :: (QErrM m, CacheRWM m, DefaultRolesSchema m)
   => m ()
 buildGCtxMapPG = do
   sc <- askSchemaCache
@@ -771,40 +793,6 @@ ppGCtx gCtx =
     qRootO = _gQueryRoot gCtx
     mRootO = _gMutRoot gCtx
     sRootO = _gSubRoot gCtx
-
--- | A /types aggregate/, which holds role-specific information about visible GraphQL types.
--- Importantly, it holds more than just the information needed by GraphQL: it also includes how the
--- GraphQL types relate to Postgres types, which is used to validate literals provided for
--- Postgres-specific scalars.
-data TyAgg
-  = TyAgg
-  { _taTypes   :: !TypeMap
-  , _taFields  :: !FieldMap
-  , _taScalars :: !(Set.HashSet PGScalarType)
-  , _taOrdBy   :: !OrdByCtx
-  } deriving (Show, Eq)
-
-instance Semigroup TyAgg where
-  (TyAgg t1 f1 s1 o1) <> (TyAgg t2 f2 s2 o2) =
-    TyAgg (Map.union t1 t2) (Map.union f1 f2)
-          (Set.union s1 s2) (Map.union o1 o2)
-
-instance Monoid TyAgg where
-  mempty = TyAgg Map.empty Map.empty Set.empty Map.empty
-
--- | A role-specific mapping from root field names to allowed operations.
-data RootFields
-  = RootFields
-  { rootQueryFields    :: !(Map.HashMap G.Name (QueryCtx, ObjFldInfo))
-  , rootMutationFields :: !(Map.HashMap G.Name (MutationCtx, ObjFldInfo))
-  } deriving (Show, Eq)
-
-instance Semigroup RootFields where
-  RootFields a1 b1 <> RootFields a2 b2
-    = RootFields (a1 <> a2) (b1 <> b2)
-
-instance Monoid RootFields where
-  mempty = RootFields Map.empty Map.empty
 
 mkGCtx :: TyAgg -> RootFields -> InsCtxMap -> GCtx
 mkGCtx tyAgg (RootFields queryFields mutationFields) insCtxMap =

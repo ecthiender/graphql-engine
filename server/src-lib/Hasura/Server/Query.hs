@@ -34,6 +34,8 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Init                 (InstanceId (..))
 import           Hasura.Server.Utils
 
+import qualified Hasura.GraphQL.Schema              as GS
+
 
 data RQLQueryV1
   = RQAddExistingTableOrView !TrackTable
@@ -208,7 +210,7 @@ peelRun sc runCtx@(RunCtx userInfo _ _) pgExecCtx txAccess (Run m) =
     lazyTx = runReaderT (runStateT m sc) runCtx
 
 runQuery
-  :: (MonadIO m, MonadError QErr m)
+  :: (MonadIO m, MonadError QErr m, GS.DefaultRolesSchema m)
   => PGExecCtx -> InstanceId
   -> UserInfo -> SchemaCache -> HTTP.Manager
   -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, SchemaCache)
@@ -340,6 +342,7 @@ runQueryM
   :: ( QErrM m, CacheRWM m, UserInfoM m, MonadTx m
      , MonadIO m, HasHttpManager m, HasSQLGenCtx m
      , HasSystemDefined m
+     , GS.DefaultRolesSchema m
      )
   => RQLQuery
   -> m EncJSON

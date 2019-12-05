@@ -14,6 +14,8 @@ import           Hasura.SQL.Types
 
 import qualified Data.HashMap.Strict               as HM
 
+import qualified Hasura.GraphQL.Schema             as GS
+
 renameRelP2
   :: ( QErrM m
      , MonadTx m
@@ -21,6 +23,7 @@ renameRelP2
      , MonadIO m
      , HasHttpManager m
      , HasSQLGenCtx m
+     , GS.DefaultRolesSchema m
      )
   => QualifiedTable -> RelName -> RelInfo -> m ()
 renameRelP2 qt newRN relInfo = withNewInconsistentObjsCheck $ do
@@ -47,6 +50,7 @@ runRenameRel
      , MonadIO m
      , HasHttpManager m
      , HasSQLGenCtx m
+     , GS.DefaultRolesSchema m
      )
   => RenameRel -> m EncJSON
 runRenameRel defn = do

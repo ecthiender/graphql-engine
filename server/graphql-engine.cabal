@@ -285,6 +285,7 @@ library
                      , Hasura.GraphQL.Schema.Mutation.Insert
                      , Hasura.GraphQL.Schema.Mutation.Update
                      , Hasura.GraphQL.Schema.Mutation.Delete
+                     , Hasura.GraphQL.Schema.Default
                      , Hasura.GraphQL.Schema
                      , Hasura.GraphQL.Utils
                      , Hasura.GraphQL.Validate

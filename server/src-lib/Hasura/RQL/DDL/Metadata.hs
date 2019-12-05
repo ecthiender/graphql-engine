@@ -50,6 +50,7 @@ import           Hasura.RQL.Types
 import           Hasura.SQL.Types
 
 import qualified Database.PG.Query                  as Q
+import qualified Hasura.GraphQL.Schema              as GS
 import qualified Hasura.RQL.DDL.ComputedField       as ComputedField
 import qualified Hasura.RQL.DDL.Permission          as Permission
 import qualified Hasura.RQL.DDL.QueryCollection     as Collection
@@ -177,7 +178,7 @@ clearMetadata = Q.catchE defaultTxErrorHandler $ do
   Q.unitQ "DELETE FROM hdb_catalog.hdb_query_collection WHERE is_system_defined <> 'true'" () False
 
 runClearMetadata
-  :: (QErrM m, CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m)
+  :: (QErrM m, CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m, GS.DefaultRolesSchema m)
   => ClearMetadata -> m EncJSON
 runClearMetadata _ = do
   liftTx clearMetadata
@@ -279,6 +280,7 @@ applyQP2
      , HasHttpManager m
      , HasSQLGenCtx m
      , HasSystemDefined m
+     , GS.DefaultRolesSchema m
      )
   => ReplaceMetadata
   -> m EncJSON
@@ -369,6 +371,7 @@ runReplaceMetadata
   :: ( QErrM m, UserInfoM m, CacheRWM m, MonadTx m
      , MonadIO m, HasHttpManager m, HasSQLGenCtx m
      , HasSystemDefined m
+     , GS.DefaultRolesSchema m
      )
   => ReplaceMetadata -> m EncJSON
 runReplaceMetadata q = do
@@ -561,7 +564,7 @@ instance FromJSON ReloadMetadata where
 $(deriveToJSON defaultOptions ''ReloadMetadata)
 
 runReloadMetadata
-  :: (QErrM m, CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m)
+  :: (QErrM m, CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m, GS.DefaultRolesSchema m)
   => ReloadMetadata -> m EncJSON
 runReloadMetadata _ = do
   Schema.buildSchemaCache

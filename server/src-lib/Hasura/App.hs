@@ -377,6 +377,8 @@ mkConsoleHTML path authMode enableTelemetry consoleAssetsDir =
 
       consoleTmplt = $(M.embedSingleTemplate "src-rsr/console.html")
 
+instance DefaultRolesSchema AppM where
+  generateDefaultRolesSchema = mkAdminSchema
 
 telemetryNotice :: String
 telemetryNotice =

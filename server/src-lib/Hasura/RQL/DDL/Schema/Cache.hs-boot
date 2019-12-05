@@ -5,8 +5,10 @@ import           Hasura.Prelude
 import           Hasura.Db
 import           Hasura.RQL.Types
 
+import qualified Hasura.GraphQL.Schema as GS
+
 type CacheBuildM m
-  = (CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m)
+  = (CacheRWM m, MonadTx m, MonadIO m, HasHttpManager m, HasSQLGenCtx m, GS.DefaultRolesSchema m)
 
 buildSchemaCacheStrict :: (CacheBuildM m) => m ()
 buildSchemaCacheFor :: (CacheBuildM m) => MetadataObjId -> m ()
