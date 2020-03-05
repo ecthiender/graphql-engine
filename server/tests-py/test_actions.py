@@ -71,7 +71,7 @@ class TestActionsAsync:
         assert status == 200, resp
         assert 'data' in resp
         action_id = resp['data']['create_user']
-        time.sleep(2)
+        time.sleep(5)
 
         query_async = '''
         query ($action_id: uuid!){
@@ -122,7 +122,7 @@ class TestActionsAsync:
         assert status == 200, resp
         assert 'data' in resp
         action_id = resp['data']['create_user']
-        time.sleep(2)
+        time.sleep(5)
 
         query_async = '''
         query ($action_id: uuid!){
@@ -188,7 +188,7 @@ class TestActionsAsync:
         assert status == 200, resp
         assert 'data' in resp
         action_id = resp['data']['create_user']
-        time.sleep(2)
+        time.sleep(5)
 
         query_async = '''
         query ($action_id: uuid!){
