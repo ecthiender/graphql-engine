@@ -31,7 +31,7 @@ introspectionQuery :: BL.ByteString
 introspectionQuery = $(embedStringFile "src-rsr/introspection.json")
 
 fetchRemoteSchema
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadError (QErr a) m)
   => HTTP.Manager
   -> RemoteSchemaName
   -> RemoteSchemaInfo
@@ -73,10 +73,10 @@ fetchRemoteSchema manager name def@(RemoteSchemaInfo url headerConf _ timeout) =
 
   where
     noQueryRoot = err400 Unexpected "query root not found in remote schema"
-    remoteSchemaErr :: (MonadError QErr m) => T.Text -> m a
+    remoteSchemaErr :: (MonadError (QErr a) m) => T.Text -> m a
     remoteSchemaErr = throw400 RemoteSchemaError
 
-    throwHttpErr :: (MonadError QErr m) => HTTP.HttpException -> m a
+    throwHttpErr :: (MonadError (QErr a) m) => HTTP.HttpException -> m a
     throwHttpErr = throwWithInternal httpExceptMsg . httpExceptToJSON
 
     throwNon200 st = throwWithInternal (non200Msg st) . decodeNon200Resp
@@ -96,7 +96,7 @@ fetchRemoteSchema manager name def@(RemoteSchemaInfo url headerConf _ timeout) =
       Left _  -> J.object ["raw_body" J..= bsToTxt (BL.toStrict bs)]
 
 mergeSchemas
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => RemoteSchemaMap
   -> GS.GCtxMap
   -- the merged GCtxMap and the default GCtx without roles
@@ -109,14 +109,14 @@ mergeSchemas rmSchemaMap gCtxMap = do
     remoteSchemas = map rscGCtx $ Map.elems rmSchemaMap
 
 mkDefaultRemoteGCtx
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => [GC.RemoteGCtx] -> m GS.GCtx
 mkDefaultRemoteGCtx =
   foldlM (\combG -> mergeGCtx combG . convRemoteGCtx) GC.emptyGCtx
 
 -- merge a remote schema `gCtx` into current `gCtxMap`
 mergeRemoteSchema
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => GS.GCtxMap
   -> GS.GCtx
   -> m GS.GCtxMap
@@ -127,7 +127,7 @@ mergeRemoteSchema ctxMap mergedRemoteGCtx = do
   return $ Map.fromList res
 
 mergeGCtx
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => GS.GCtx
   -> GS.GCtx
   -> m GS.GCtx

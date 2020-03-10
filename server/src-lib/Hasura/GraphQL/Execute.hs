@@ -94,12 +94,12 @@ class Monad m => GQLApiAuthorization m where
     -- ^ request headers and IP address
     -> GQLReqUnparsed
     -- ^ the unparsed GraphQL query string (and related values)
-    -> m (Either QErr GQLReqParsed)
+    -> m (Either (QErr a) GQLReqParsed)
     -- ^ after enforcing authorization, it should return the parsed GraphQL query
 
 -- Enforces the current limitation
 assertSameLocationNodes
-  :: (MonadError QErr m) => [VT.TypeLoc] -> m VT.TypeLoc
+  :: (MonadError (QErr a) m) => [VT.TypeLoc] -> m VT.TypeLoc
 assertSameLocationNodes typeLocs =
   case Set.toList (Set.fromList typeLocs) of
     -- this shouldn't happen
@@ -134,7 +134,7 @@ gatherTypeLocs gCtx nodes =
 type ExecPlanPartial = GQExecPlan (GCtx, VQ.RootSelSet)
 
 getExecPlanPartial
-  :: (MonadReusability m, MonadError QErr m)
+  :: (MonadReusability m, MonadError (QErr a) m)
   => UserInfo
   -> SchemaCache
   -> Bool
@@ -193,7 +193,7 @@ type ExecPlanResolved
   = GQExecPlan ExecOp
 
 getResolvedExecPlan
-  :: (HasVersion, MonadError QErr m, MonadIO m)
+  :: (HasVersion, MonadError (QErr a) m, MonadIO m)
   => PGExecCtx
   -> EP.PlanCache
   -> UserInfo
@@ -251,10 +251,10 @@ type E m =
           , OrdByCtx
           , InsCtxMap
           , SQLGenCtx
-          ) (ExceptT QErr m)
+          ) (ExceptT (QErr a) m)
 
 runE
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => GCtx
   -> SQLGenCtx
   -> UserInfo
@@ -273,7 +273,7 @@ runE ctx sqlGenCtx userInfo action = do
     insCtxMap = _gInsCtxMap ctx
 
 getQueryOp
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => GCtx
   -> SQLGenCtx
   -> UserInfo
@@ -288,7 +288,7 @@ mutationRootName = "mutation_root"
 
 resolveMutSelSet
   :: ( HasVersion
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader r m
      , Has UserInfo r
      , Has MutationCtxMap r
@@ -322,7 +322,7 @@ resolveMutSelSet fields = do
       forM aliasedTxs $ \(al, tx) -> (,) al <$> tx
 
 getMutOp
-  :: (HasVersion, MonadError QErr m, MonadIO m)
+  :: (HasVersion, MonadError (QErr a) m, MonadIO m)
   => GCtx
   -> SQLGenCtx
   -> UserInfo
@@ -349,7 +349,7 @@ getMutOp ctx sqlGenCtx userInfo manager reqHeaders selSet =
         insCtxMap = _gInsCtxMap ctx
 
 getSubsOpM
-  :: ( MonadError QErr m
+  :: ( MonadError (QErr a) m
      , MonadReader r m
      , Has QueryCtxMap r
      , Has FieldMap r
@@ -373,7 +373,7 @@ getSubsOpM pgExecCtx initialReusability fld =
       EL.buildLiveQueryPlan pgExecCtx (VQ._fAlias fld) astUnresolved varTypes
 
 getSubsOp
-  :: ( MonadError QErr m
+  :: ( MonadError (QErr a) m
      , MonadIO m
      )
   => PGExecCtx
@@ -389,7 +389,7 @@ getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability fld =
 execRemoteGQ
   :: ( HasVersion
      , MonadIO m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader ExecutionCtx m
      )
   => RequestId
@@ -436,7 +436,7 @@ execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
 
   where
     RemoteSchemaInfo url hdrConf fwdClientHdrs timeout = rsi
-    httpThrow :: (MonadError QErr m) => HTTP.HttpException -> m a
+    httpThrow :: (MonadError (QErr a) m) => HTTP.HttpException -> m a
     httpThrow = \case
       HTTP.HttpExceptionRequest _req content -> throw500 $ T.pack . show $ content
       HTTP.InvalidUrlException _url reason -> throw500 $ T.pack . show $ reason

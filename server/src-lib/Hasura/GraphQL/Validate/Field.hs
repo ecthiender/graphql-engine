@@ -106,12 +106,12 @@ data FieldGroup
 --   , _geLocations :: ![GLoc]
 --   } deriving (Show, Eq)
 
--- throwGE :: (MonadError QErr m) => Text -> m a
--- throwGE msg = throwError $ QErr msg []
+-- throwGE :: (MonadError (QErr a) m) => Text -> m a
+-- throwGE msg = throwError $ (QErr a) msg []
 
 withDirectives
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReusability m
      )
   => [G.Directive]
@@ -148,7 +148,7 @@ withDirectives dirs act = do
 
 denormSel
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReusability m
      )
   => [G.Name] -- visited fragments
@@ -170,7 +170,7 @@ denormSel visFrags parObjTyInfo sel = case sel of
 
 processArgs
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      )
   => ParamMap
   -> [G.Argument]
@@ -202,7 +202,7 @@ processArgs fldParams argsL = do
 
 denormFld
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReusability m
      )
   => [G.Name] -- visited fragments
@@ -244,7 +244,7 @@ denormFld visFrags fldInfo (G.Field aliasM name args dirs selSet) = do
 
 denormInlnFrag
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReusability m
      )
   => [G.Name] -- visited fragments
@@ -264,7 +264,7 @@ denormInlnFrag visFrags fldTyInfo inlnFrag = do
 
 denormSelSet
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReusability m
      )
   => [G.Name] -- visited fragments
@@ -282,7 +282,7 @@ denormSelSet visFrags fldTyInfo selSet =
 
 mergeFields
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReusability m
      )
   => Seq.Seq Field
@@ -314,7 +314,7 @@ mergeFields flds =
 
 denormFrag
   :: ( MonadReader ValidationCtx m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReusability m
      )
   => [G.Name] -- visited fragments

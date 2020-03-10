@@ -30,7 +30,7 @@ import qualified Language.GraphQL.Draft.Syntax          as G
 runGQ
   :: ( HasVersion
      , MonadIO m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader E.ExecutionCtx m
      )
   => RequestId
@@ -73,7 +73,7 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
 runGQBatched
   :: ( HasVersion
      , MonadIO m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader E.ExecutionCtx m
      )
   => RequestId
@@ -99,7 +99,7 @@ runGQBatched reqId userInfo reqHdrs reqs =
 
 runHasuraGQ
   :: ( MonadIO m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader E.ExecutionCtx m
      )
   => RequestId

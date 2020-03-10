@@ -39,7 +39,7 @@ import           Hasura.SQL.Types
 import           Hasura.SQL.Value
 
 resolveMutationFields
-  :: ( MonadReusability m, MonadError QErr m, MonadReader r m, Has FieldMap r
+  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r
      )
   => G.NamedType -> SelSet -> m (RR.MutFldsG UnresolvedVal)
@@ -61,7 +61,7 @@ resolveMutationFields ty selSet = fmap (map (first FieldName)) $
       UVSession    -> pure UVSession
 
 convertRowObj
-  :: (MonadReusability m, MonadError QErr m)
+  :: (MonadReusability m, MonadError (QErr a) m)
   => PGColGNameMap
   -> AnnInpVal
   -> m [(PGCol, UnresolvedVal)]
@@ -88,7 +88,7 @@ lhsExpOp op annTy (col, e) =
     annExp = S.SETyAnn e annTy
 
 convObjWithOp
-  :: (MonadReusability m, MonadError QErr m)
+  :: (MonadReusability m, MonadError (QErr a) m)
   => PGColGNameMap -> ApplySQLOp -> AnnInpVal -> m [(PGCol, UnresolvedVal)]
 convObjWithOp colGNameMap opFn val =
   flip withObject val $ \_ obj -> forM (OMap.toList obj) $ \(k, v) -> do
@@ -100,7 +100,7 @@ convObjWithOp colGNameMap opFn val =
   return (pgCol, UVSQL sqlExp)
 
 convDeleteAtPathObj
-  :: (MonadReusability m, MonadError QErr m)
+  :: (MonadReusability m, MonadError (QErr a) m)
   => PGColGNameMap -> AnnInpVal -> m [(PGCol, UnresolvedVal)]
 convDeleteAtPathObj colGNameMap val =
   flip withObject val $ \_ obj -> forM (OMap.toList obj) $ \(k, v) -> do
@@ -113,7 +113,7 @@ convDeleteAtPathObj colGNameMap val =
     return (pgCol, UVSQL sqlExp)
 
 convertUpdateP1
-  :: (MonadReusability m, MonadError QErr m)
+  :: (MonadReusability m, MonadError (QErr a) m)
   => UpdOpCtx -- the update context
   -> (ArgsMap -> m AnnBoolExpUnresolved) -- the bool expression parser
   -> (Field -> m (RR.MutationOutputG UnresolvedVal)) -- the selection set resolver
@@ -187,7 +187,7 @@ convertUpdateP1 opCtx boolExpParser selectionResolver fld = do
           Right items -> pure $ resolvedPreSetItems <> OMap.toList items
 
 convertUpdateGeneric
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m
      , Has SQLGenCtx r
      )
@@ -210,7 +210,7 @@ convertUpdateGeneric opCtx boolExpParser selectionResolver fld = do
   bool whenNonEmptyItems whenEmptyItems $ null $ RU.uqp1SetExps annUpdResolved
 
 convertUpdate
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r
      )
@@ -221,7 +221,7 @@ convertUpdate opCtx =
   convertUpdateGeneric opCtx whereExpressionParser mutationFieldsResolver
 
 convertUpdateByPk
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r
      )
@@ -262,7 +262,7 @@ convertDeleteGeneric opCtx boolExpParser selectionResolver fld = do
     allCols = Map.elems colGNameMap
 
 convertDelete
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r
      )
@@ -273,7 +273,7 @@ convertDelete opCtx =
   convertDeleteGeneric opCtx whereExpressionParser mutationFieldsResolver
 
 convertDeleteByPk
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r
      )
@@ -286,14 +286,14 @@ convertDeleteByPk opCtx field =
     boolExpParser =  pgColValToBoolExp (_docAllCols opCtx)
 
 whereExpressionParser
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m, Has FieldMap r
      )
   => ArgsMap -> m AnnBoolExpUnresolved
 whereExpressionParser args = withArg args "where" parseBoolExp
 
 mutationFieldsResolver
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r
      )
@@ -302,7 +302,7 @@ mutationFieldsResolver field =
   RR.MOutMultirowFields <$> resolveMutationFields (_fType field) (_fSelSet field)
 
 tableSelectionAsMutationOutput
-  :: ( MonadReusability m, MonadError QErr m
+  :: ( MonadReusability m, MonadError (QErr a) m
      , MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r
      )

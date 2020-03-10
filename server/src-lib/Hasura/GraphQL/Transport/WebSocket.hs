@@ -118,7 +118,7 @@ sendMsgWithMetadata wsConn msg (LQ.LiveQueryMetadata execTime) =
 data OpDetail
   = ODStarted
   | ODProtoErr !Text
-  | ODQueryErr !QErr
+  | ODQueryErr !(QErr a)
   | ODCompleted
   | ODStopped
   deriving (Show, Eq)
@@ -140,7 +140,7 @@ $(J.deriveToJSON (J.aesonDrop 3 J.snakeCase) ''OperationDetails)
 
 data WSEvent
   = EAccepted
-  | ERejected !QErr
+  | ERejected !(QErr a)
   | EConnErr !ConnErrMsg
   | EOperation !OperationDetails
   | EClosed

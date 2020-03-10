@@ -16,7 +16,7 @@ import           Hasura.Prelude
 import           Hasura.RQL.Types
 
 checkSchemaConflicts
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => GCtx -> GCtx -> m ()
 checkSchemaConflicts gCtx remoteCtx = do
   let typeMap     = _gTypes gCtx -- hasura typemap
@@ -92,7 +92,7 @@ checkSchemaConflicts gCtx remoteCtx = do
                 ]
 
 checkConflictingNode
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => GCtx
   -> G.Name
   -> m ()

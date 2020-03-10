@@ -18,7 +18,7 @@ import           Hasura.GraphQL.Validate.Types
 import           Hasura.RQL.Types
 
 getFieldInfo
-  :: ( MonadError QErr m)
+  :: ( MonadError (QErr a) m)
   => ObjTyInfo -> G.Name -> m ObjFldInfo
 getFieldInfo oti fldName =
   onNothing (Map.lookup fldName $ _otiFields oti) $ throwVE $
@@ -26,7 +26,7 @@ getFieldInfo oti fldName =
   " not found in type: " <> showNamedTy (_otiName oti)
 
 getInpFieldInfo
-  :: ( MonadError QErr m)
+  :: ( MonadError (QErr a) m)
   => InpObjTyInfo -> G.Name -> m G.GType
 getInpFieldInfo tyInfo fldName =
   fmap _iviType $ onNothing (Map.lookup fldName $ _iotiFields tyInfo) $
@@ -48,7 +48,7 @@ instance Has TypeMap ValidationCtx where
 
 getTyInfo
   :: ( MonadReader r m , Has TypeMap r
-     , MonadError QErr m)
+     , MonadError (QErr a) m)
   => G.NamedType
   -> m TypeInfo
 getTyInfo namedTy = do
@@ -58,7 +58,7 @@ getTyInfo namedTy = do
 
 getTyInfoVE
   :: ( MonadReader r m , Has TypeMap r
-     , MonadError QErr m)
+     , MonadError (QErr a) m)
   => G.NamedType
   -> m TypeInfo
 getTyInfoVE namedTy = do

@@ -42,8 +42,8 @@ data PGExecCtx
   , _pecTxIsolation :: !Q.TxIsolation
   }
 
-class (MonadError QErr m) => MonadTx m where
-  liftTx :: Q.TxE QErr a -> m a
+class (forall code m. (MonadError (QErr code) m, AsCodeHasura code)) => MonadTx m where
+  liftTx :: Q.TxE (QErr code) a -> m a
 
 instance (MonadTx m) => MonadTx (StateT s m) where
   liftTx = lift . liftTx
@@ -74,26 +74,26 @@ lazyTxToQTx = \case
   LTTx tx  -> tx
 
 runLazyTx
-  :: (MonadIO m)
+  :: (MonadIO m, AsCodeHasura c)
   => PGExecCtx
   -> Q.TxAccess
-  -> LazyTx QErr a -> ExceptT QErr m a
+  -> LazyTx (QErr c) a -> ExceptT (QErr c) m a
 runLazyTx (PGExecCtx pgPool txIso) txAccess = \case
   LTErr e  -> throwError e
   LTNoTx a -> return a
   LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx pgPool (txIso, Just txAccess) tx
 
 runLazyTx'
-  :: MonadIO m => PGExecCtx -> LazyTx QErr a -> ExceptT QErr m a
+  :: (MonadIO m, AsCodeHasura c) => PGExecCtx -> LazyTx (QErr c) a -> ExceptT (QErr c) m a
 runLazyTx' (PGExecCtx pgPool _) = \case
   LTErr e  -> throwError e
   LTNoTx a -> return a
   LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx' pgPool tx
 
-type RespTx = Q.TxE QErr EncJSON
-type LazyRespTx = LazyTx QErr EncJSON
+type RespTx code = Q.TxE (QErr code) EncJSON
+type LazyRespTx code = LazyTx (QErr code) EncJSON
 
-setHeadersTx :: UserVars -> Q.TxE QErr ()
+setHeadersTx :: AsCodeHasura c => UserVars -> Q.TxE (QErr c) ()
 setHeadersTx uVars =
   Q.unitQE defaultTxErrorHandler setSess () False
   where
@@ -103,12 +103,12 @@ setHeadersTx uVars =
 sessionInfoJsonExp :: UserVars -> S.SQLExp
 sessionInfoJsonExp = S.SELit . J.encodeToStrictText
 
-defaultTxErrorHandler :: Q.PGTxErr -> QErr
+defaultTxErrorHandler :: AsCodeHasura c => Q.PGTxErr -> QErr c
 defaultTxErrorHandler = mkTxErrorHandler (const False)
 
 -- | Constructs a transaction error handler given a predicate that determines which errors are
 -- expected and should be reported to the user. All other errors are considered internal errors.
-mkTxErrorHandler :: (PGErrorType -> Bool) -> Q.PGTxErr -> QErr
+mkTxErrorHandler :: AsCodeHasura c => (PGErrorType -> Bool) -> Q.PGTxErr -> QErr c
 mkTxErrorHandler isExpectedError txe = fromMaybe unexpectedError expectedError
   where
     unexpectedError = (internalError "postgres query error") { qeInternal = Just $ J.toJSON txe }
@@ -119,26 +119,25 @@ mkTxErrorHandler isExpectedError txe = fromMaybe unexpectedError expectedError
       guard $ isExpectedError errorType
       pure $ case errorType of
         PGIntegrityConstraintViolation code ->
-          let cv = (ConstraintViolation,)
+          let cv = (review _ConstraintViolation (),)
               customMessage = (code ^? _Just._PGErrorSpecific) <&> \case
                 PGRestrictViolation -> cv "Can not delete or update due to data being referred. "
                 PGNotNullViolation -> cv "Not-NULL violation. "
                 PGForeignKeyViolation -> cv "Foreign key violation. "
                 PGUniqueViolation -> cv "Uniqueness violation. "
-                PGCheckViolation -> (PermissionError, "Check constraint violation. ")
+                PGCheckViolation -> (review _PermissionError (), "Check constraint violation. ")
                 PGExclusionViolation -> cv "Exclusion violation. "
-          in maybe (ConstraintViolation, message) (fmap (<> message)) customMessage
-
+          in maybe (review _ConstraintViolation (), message) (fmap (<> message)) customMessage
         PGDataException code -> case code of
-          Just (PGErrorSpecific PGInvalidEscapeSequence) -> (BadRequest, message)
-          _                                              -> (DataException, message)
+          Just (PGErrorSpecific PGInvalidEscapeSequence) -> (review _BadRequest (), message)
+          _                                              -> (review _DataException (), message)
 
-        PGSyntaxErrorOrAccessRuleViolation code -> (ConstraintError,) $ case code of
+        PGSyntaxErrorOrAccessRuleViolation code -> (review _ConstraintError (),) $ case code of
           Just (PGErrorSpecific PGInvalidColumnReference) ->
             "there is no unique or exclusion constraint on target column(s)"
           _ -> message
 
-withUserInfo :: UserInfo -> LazyTx QErr a -> LazyTx QErr a
+withUserInfo :: AsCodeHasura c => UserInfo -> LazyTx (QErr c) a -> LazyTx (QErr c) a
 withUserInfo uInfo = \case
   LTErr e  -> LTErr e
   LTNoTx a -> LTNoTx a
@@ -172,10 +171,11 @@ instance MonadError e (LazyTx e) where
   LTTx txe `catchError` f =
     LTTx $ txe `catchError` (lazyTxToQTx . f)
 
-instance MonadTx (LazyTx QErr) where
+
+instance MonadTx (LazyTx (QErr code)) where
   liftTx = LTTx
 
-instance MonadTx (Q.TxE QErr) where
+instance MonadTx (Q.TxE (QErr code)) where
   liftTx = id
 
 instance MonadIO (LazyTx e) where

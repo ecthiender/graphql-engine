@@ -50,7 +50,7 @@ import           Hasura.SQL.Value
 import qualified Hasura.SQL.DML                as S
 
 getFldInfo
-  :: (MonadError QErr m, MonadReader r m, Has FieldMap r)
+  :: (MonadError (QErr a) m, MonadReader r m, Has FieldMap r)
   => G.NamedType -> G.Name
   -> m ResolveField
 getFldInfo nt n = do
@@ -60,7 +60,7 @@ getFldInfo nt n = do
     showNamedTy nt
 
 getPGColInfo
-  :: (MonadError QErr m, MonadReader r m, Has FieldMap r)
+  :: (MonadError (QErr a) m, MonadReader r m, Has FieldMap r)
   => G.NamedType -> G.Name -> m PGColumnInfo
 getPGColInfo nt n = do
   fldInfo <- getFldInfo nt n
@@ -74,7 +74,7 @@ getPGColInfo nt n = do
       <> showNamedTy nt <> ":" <> showName n
 
 getArg
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => ArgsMap
   -> G.Name
   -> m AnnInpVal
@@ -83,17 +83,17 @@ getArg args arg =
   throw500 $ "missing argument: " <> showName arg
 
 prependArgsInPath
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => m a -> m a
 prependArgsInPath = withPathK "args"
 
 nameAsPath
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => G.Name -> m a -> m a
 nameAsPath name = withPathK (G.unName name)
 
 withArg
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => ArgsMap
   -> G.Name
   -> (AnnInpVal -> m a)
@@ -102,7 +102,7 @@ withArg args arg f = prependArgsInPath $ nameAsPath arg $
   getArg args arg >>= f
 
 withArgM
-  :: (MonadReusability m, MonadError QErr m)
+  :: (MonadReusability m, MonadError (QErr a) m)
   => ArgsMap
   -> G.Name
   -> (AnnInpVal -> m a)
@@ -145,10 +145,10 @@ withSelSet selSet f =
     res <- f fld
     return (G.unName $ G.unAlias $ _fAlias fld, res)
 
-fieldAsPath :: (MonadError QErr m) => Field -> m a -> m a
+fieldAsPath :: (MonadError (QErr a) m) => Field -> m a -> m a
 fieldAsPath = nameAsPath . _fName
 
-resolvePGCol :: (MonadError QErr m)
+resolvePGCol :: (MonadError (QErr a) m)
              => PGColGNameMap -> G.Name -> m PGColumnInfo
 resolvePGCol colFldMap fldName =
   onNothing (Map.lookup fldName colFldMap) $ throw500 $

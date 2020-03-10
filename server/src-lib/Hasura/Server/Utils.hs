@@ -6,7 +6,6 @@ import           Data.Bits                  (shift, (.&.))
 import           Data.ByteString.Char8      (ByteString)
 import           Data.Char
 import           Data.List                  (find)
-import           Data.Time.Clock
 import           Data.Word                  (Word32)
 import           Language.Haskell.TH.Syntax (Lift)
 import           Network.Socket             (SockAddr (..))

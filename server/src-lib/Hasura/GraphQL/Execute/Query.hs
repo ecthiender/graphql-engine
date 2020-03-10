@@ -81,7 +81,7 @@ instance J.ToJSON ReusableQueryPlan where
              ]
 
 withPlan
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => UserVars -> PGPlan -> ReusableVariableValues -> m PreparedSql
 withPlan usrVars (PGPlan q reqVars prepMap) annVars = do
   prepMap' <- foldM getVar prepMap (Map.toList reqVars)
@@ -97,7 +97,7 @@ withPlan usrVars (PGPlan q reqVars prepMap) annVars = do
 
 -- turn the current plan into a transaction
 mkCurPlanTx
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => UserVars
   -> FieldPlans
   -> m (LazyRespTx, GeneratedSqlMap)
@@ -179,7 +179,7 @@ queryRootName :: Text
 queryRootName = "query_root"
 
 convertQuerySelSet
-  :: ( MonadError QErr m
+  :: ( MonadError (QErr a) m
      , MonadReader r m
      , Has TypeMap r
      , Has QueryCtxMap r
@@ -212,7 +212,7 @@ convertQuerySelSet initialReusability fields = do
 
 -- use the existing plan and new variables to create a pg query
 queryOpFromPlan
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => UserVars
   -> Maybe GH.VariableValues
   -> ReusableQueryPlan

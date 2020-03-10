@@ -319,7 +319,7 @@ runAsAdmin
   -> SQLGenCtx
   -> HTTP.Manager
   -> Run a
-  -> m (Either QErr a)
+  -> m (Either (QErr a) a)
 runAsAdmin pool sqlGenCtx httpManager m = do
   let runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
       pgCtx = PGExecCtx pool Q.Serializable

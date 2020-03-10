@@ -10,6 +10,7 @@ module Hasura.GraphQL.Utils
   , simpleGraphQLQuery
   ) where
 
+import           Control.Lens
 import           Hasura.Prelude
 import           Hasura.RQL.Types.Error
 
@@ -21,8 +22,8 @@ import qualified Language.GraphQL.Draft.Syntax as G
 showName :: G.Name -> Text
 showName name = "\"" <> G.unName name <> "\""
 
-throwVE :: (MonadError QErr m) => Text -> m a
-throwVE = throw400 ValidationFailed
+throwVE :: (MonadError (QErr c) m, AsCodeHasura c) => Text -> m a
+throwVE = throw400 $ review _ValidationFailed ()
 
 showNamedTy :: G.NamedType -> Text
 showNamedTy nt =

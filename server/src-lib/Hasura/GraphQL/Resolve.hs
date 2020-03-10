@@ -68,7 +68,7 @@ toPGQuery = \case
   QRFActionSelect s -> DS.selectQuerySQL DS.JASSingleObject s
 
 validateHdrs
-  :: (Foldable t, QErrM m) => UserInfo -> t Text -> m ()
+  :: (Foldable t, (QErr a)M m) => UserInfo -> t Text -> m ()
 validateHdrs userInfo hdrs = do
   let receivedVars = userVars userInfo
   forM_ hdrs $ \hdr ->
@@ -76,7 +76,7 @@ validateHdrs userInfo hdrs = do
     throw400 NotFound $ hdr <<> " header is expected but not found"
 
 queryFldToPGAST
-  :: ( MonadReusability m, MonadError QErr m, MonadReader r m, Has FieldMap r
+  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r, Has UserInfo r
      , Has QueryCtxMap r
      )
@@ -107,7 +107,7 @@ queryFldToPGAST fld = do
 mutFldToTx
   :: ( HasVersion
      , MonadReusability m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader r m
      , Has UserInfo r
      , Has MutationCtxMap r
@@ -148,7 +148,7 @@ mutFldToTx fld = do
 
 getOpCtx
   :: ( MonadReusability m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader r m
      , Has (OpCtxMap a) r
      )

@@ -55,7 +55,7 @@ getInsPerm tabInfo role
     rolePermInfoMap = _tiRolePermInfoMap tabInfo
 
 getTabInfo
-  :: MonadError QErr m
+  :: MonadError (QErr a) m
   => TableCache -> QualifiedTable -> m TableInfo
 getTabInfo tc t =
   onNothing (Map.lookup t tc) $
@@ -459,7 +459,7 @@ getSelPermission tabInfo role =
   Map.lookup role (_tiRolePermInfoMap tabInfo) >>= _permSel
 
 getSelPerm
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => TableCache
   -- all the fields of a table
   -> FieldInfoMap FieldInfo
@@ -519,7 +519,7 @@ getSelPerm tableCache fields role selPermInfo = do
     allowedScalarComputedFields = spiScalarComputedFields selPermInfo
 
 mkInsCtx
-  :: MonadError QErr m
+  :: MonadError (QErr a) m
   => RoleName
   -> TableCache
   -> FieldInfoMap FieldInfo
@@ -552,7 +552,7 @@ mkInsCtx role tableCache fields insPermInfo updPermM = do
     isInsertable (Just _) viewInfoM = isMutable viIsInsertable viewInfoM
 
 mkAdminInsCtx
-  :: MonadError QErr m
+  :: MonadError (QErr a) m
   => TableCache
   -> FieldInfoMap FieldInfo
   -> m InsCtx
@@ -576,7 +576,7 @@ mkAdminInsCtx tc fields = do
     rels = getValidRels fields
 
 mkAdminSelFlds
-  :: MonadError QErr m
+  :: MonadError (QErr a) m
   => FieldInfoMap FieldInfo
   -> TableCache
   -> m [SelField]
@@ -622,7 +622,7 @@ mkAdminSelFlds fields tableCache = do
     computedFields = getComputedFieldInfos fields
 
 mkGCtxRole
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => TableCache
   -> QualifiedTable
   -> Maybe PGDescription
@@ -686,7 +686,7 @@ getRootFldsRole tn pCols constraints fields funcs viM (RolePermInfo insM selM up
     allCols = getCols fields
 
 mkGCtxMapTable
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => TableCache
   -> FunctionCache
   -> TableInfo
@@ -719,7 +719,7 @@ noFilter :: AnnBoolExpPartialSQL
 noFilter = annBoolExpTrue
 
 mkGCtxMap
-  :: forall m. (MonadError QErr m)
+  :: forall m. (MonadError (QErr a) m)
   => AnnotatedObjects -> TableCache -> FunctionCache -> ActionCache -> m GCtxMap
 mkGCtxMap annotatedObjects tableCache functionCache actionCache = do
   typesMapL <- mapM (mkGCtxMapTable tableCache functionCache) $

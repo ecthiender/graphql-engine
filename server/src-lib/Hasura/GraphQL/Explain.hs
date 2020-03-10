@@ -46,16 +46,16 @@ data FieldPlan
 $(J.deriveJSON (J.aesonDrop 3 J.camelCase) ''FieldPlan)
 
 type Explain r =
-  (ReaderT r (Except QErr))
+  (ReaderT r (Except (QErr a)))
 
 runExplain
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => r -> Explain r a -> m a
 runExplain ctx m =
   either throwError return $ runExcept $ runReaderT m ctx
 
 resolveVal
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => UserInfo -> RS.UnresolvedVal -> m S.SQLExp
 resolveVal userInfo = \case
   RS.UVPG annPGVal ->
@@ -69,7 +69,7 @@ resolveVal userInfo = \case
   RS.UVSession -> pure $ sessionInfoJsonExp $ userVars userInfo
 
 getSessVarVal
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => UserInfo -> SessVar -> m SessVarVal
 getSessVarVal userInfo sessVar =
   onNothing (getVarVal sessVar usrVars) $
@@ -107,7 +107,7 @@ explainField userInfo gCtx sqlGenCtx fld =
     orderByCtx = _gOrdByCtx gCtx
 
 explainGQLQuery
-  :: (MonadError QErr m, MonadIO m)
+  :: (MonadError (QErr a) m, MonadIO m)
   => PGExecCtx
   -> SchemaCache
   -> SQLGenCtx

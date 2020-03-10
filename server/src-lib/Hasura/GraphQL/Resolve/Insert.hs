@@ -88,7 +88,7 @@ data AnnInsObj
   } deriving (Show, Eq)
 
 mkAnnInsObj
-  :: (MonadReusability m, MonadError QErr m, Has InsCtxMap r, MonadReader r m, Has FieldMap r)
+  :: (MonadReusability m, MonadError (QErr a) m, Has InsCtxMap r, MonadReader r m, Has FieldMap r)
   => RelationInfoMap
   -> PGColGNameMap
   -> AnnGObject
@@ -99,7 +99,7 @@ mkAnnInsObj relInfoMap allColMap annObj =
     emptyInsObj = AnnInsObj [] [] []
 
 traverseInsObj
-  :: (MonadReusability m, MonadError QErr m, Has InsCtxMap r, MonadReader r m, Has FieldMap r)
+  :: (MonadReusability m, MonadError (QErr a) m, Has InsCtxMap r, MonadReader r m, Has FieldMap r)
   => RelationInfoMap
   -> PGColGNameMap
   -> (G.Name, AnnInpVal)
@@ -161,7 +161,7 @@ traverseInsObj rim allColMap (gName, annVal) defVal@(AnnInsObj cols objRels arrR
             bool withNonEmptyArrData (return defVal) $ null arrDataVals
 
 parseOnConflict
-  :: (MonadReusability m, MonadError QErr m, MonadReader r m, Has FieldMap r)
+  :: (MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r)
   => QualifiedTable
   -> Maybe UpdPermForIns
   -> PGColGNameMap
@@ -203,7 +203,7 @@ parseOnConflict tn updFiltrM allColMap val = withPathK "on_conflict" $
       >>> fmap (maybe (S.BELit True) (toSQLBoolExp (S.mkQual tn)))
 
 toSQLExps
-  :: (MonadError QErr m, MonadState PrepArgs m)
+  :: (MonadError (QErr a) m, MonadState PrepArgs m)
   => [PGColWithValue]
   -> m [(PGCol, S.SQLExp)]
 toSQLExps cols =
@@ -219,7 +219,7 @@ mkSQLRow defVals withPGCol = map snd $
     withPGColMap = Map.fromList withPGCol
 
 mkInsertQ
-  :: MonadError QErr m
+  :: MonadError (QErr a) m
   => QualifiedTable
   -> Maybe RI.ConflictClauseP1
   -> [PGColWithValue]
@@ -253,7 +253,7 @@ mkInsertQ tn onConflictM insCols defVals role (insCheck, updCheck) = do
   bool nonAdminInsert adminIns $ isAdmin role
 
 fetchFromColVals
-  :: MonadError QErr m
+  :: MonadError (QErr a) m
   => ColumnValuesText
   -> [PGColumnInfo]
   -> m [(PGCol, WithScalarType PGScalarValue)]
@@ -268,7 +268,7 @@ fetchFromColVals colVal reqCols =
 -- | validate an insert object based on insert columns,
 -- | insert object relations and additional columns from parent
 validateInsert
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => [PGCol] -- ^ inserting columns
   -> [RelInfo] -- ^ object relation inserts
   -> [PGCol] -- ^ additional fields from parent
@@ -297,7 +297,7 @@ insertObjRel
   :: Bool
   -> RoleName
   -> ObjRelIns
-  -> Q.TxE QErr (Int, [PGColWithValue])
+  -> Q.TxE (QErr a) (Int, [PGColWithValue])
 insertObjRel strfyNum role objRelIns =
   withPathK relNameTxt $ do
     (affRows, colValM) <- withPathK "data" $ insertObj strfyNum role tn singleObjIns []
@@ -321,7 +321,7 @@ insertObjRel strfyNum role objRelIns =
              <> relName <<> " since insert to table "
              <> tn <<> " affects zero rows"
 
-decodeEncJSON :: (J.FromJSON a, QErrM m) => EncJSON -> m a
+decodeEncJSON :: (J.FromJSON a, (QErr a)M m) => EncJSON -> m a
 decodeEncJSON =
   either (throw500 . T.pack) decodeValue .
   J.eitherDecode . encJToLBS
@@ -332,7 +332,7 @@ insertArrRel
   -> RoleName
   -> [PGColWithValue]
   -> ArrRelIns
-  -> Q.TxE QErr Int
+  -> Q.TxE (QErr a) Int
 insertArrRel strfyNum role resCols arrRelIns =
     withPathK relNameTxt $ do
     let addCols = mergeListsWith resCols (Map.toList colMapping)
@@ -357,7 +357,7 @@ insertObj
   -> QualifiedTable
   -> SingleObjIns
   -> [PGColWithValue] -- ^ additional fields
-  -> Q.TxE QErr (Int, Maybe ColumnValuesText)
+  -> Q.TxE (QErr a) (Int, Maybe ColumnValuesText)
 insertObj strfyNum role tn singleObjIns addCols = do
   -- validate insert
   validateInsert (map fst cols) (map _riRelInfo objRels) $ map fst addCols
@@ -416,7 +416,7 @@ insertMultipleObjects
   -> [PGColWithValue] -- ^ additional fields
   -> RR.MutationOutput
   -> T.Text -- ^ error path
-  -> Q.TxE QErr EncJSON
+  -> Q.TxE (QErr a) EncJSON
 insertMultipleObjects strfyNum role tn multiObjIns addCols mutOutput errP =
   bool withoutRelsInsert withRelsInsert anyRelsToInsert
   where
@@ -461,12 +461,12 @@ insertMultipleObjects strfyNum role tn multiObjIns addCols mutOutput errP =
       runIdentity . Q.getRow
                <$> Q.rawQE dmlTxErrorHandler (Q.fromBuilder sql) [] False
 
-prefixErrPath :: (MonadError QErr m) => Field -> m a -> m a
+prefixErrPath :: (MonadError (QErr a) m) => Field -> m a -> m a
 prefixErrPath fld =
   withPathK "selectionSet" . fieldAsPath fld . withPathK "args"
 
 convertInsert
-  :: ( MonadReusability m, MonadError QErr m, MonadReader r m, Has FieldMap r
+  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r, Has InsCtxMap r
      )
   => RoleName
@@ -501,7 +501,7 @@ convertInsert role tn fld = prefixErrPath fld $ do
     onConflictM = Map.lookup "on_conflict" arguments
 
 convertInsertOne
-  :: ( MonadReusability m, MonadError QErr m, MonadReader r m, Has FieldMap r
+  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
      , Has OrdByCtx r, Has SQLGenCtx r, Has InsCtxMap r
      )
   => RoleName
@@ -528,7 +528,7 @@ convertInsertOne role qt field = prefixErrPath field $ do
 
 -- helper functions
 getInsCtx
-  :: (MonadError QErr m, MonadReader r m, Has InsCtxMap r)
+  :: (MonadError (QErr a) m, MonadReader r m, Has InsCtxMap r)
   => QualifiedTable -> m InsCtx
 getInsCtx tn = do
   ctxMap <- asks getter

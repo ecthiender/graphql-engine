@@ -91,14 +91,14 @@ newtype GQLQueryText
 type GQLReqUnparsed = GQLReq GQLQueryText
 type GQLReqParsed = GQLReq GQLExecDoc
 
-toParsed :: (MonadError QErr m ) => GQLReqUnparsed -> m GQLReqParsed
+toParsed :: (MonadError (QErr a) m ) => GQLReqUnparsed -> m GQLReqParsed
 toParsed req = case G.parseExecutableDoc gqlText of
   Left _  -> withPathK "query" $ throwVE "not a valid graphql query"
   Right a -> return $ req { _grQuery = GQLExecDoc $ G.getExecutableDefinitions a }
   where
     gqlText = _unGQLQueryText $ _grQuery req
 
-encodeGQErr :: Bool -> QErr -> J.Value
+encodeGQErr :: Bool -> (QErr a) -> J.Value
 encodeGQErr includeInternal qErr =
   J.object [ "errors" J..= [encodeGQLErr includeInternal qErr]]
 

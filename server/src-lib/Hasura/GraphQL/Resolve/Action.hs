@@ -85,7 +85,7 @@ instance J.ToJSON ActionWebhookResponse where
 resolveActionMutation
   :: ( HasVersion
      , MonadReusability m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader r m
      , MonadIO m
      , Has FieldMap r
@@ -109,7 +109,7 @@ resolveActionMutation field executionContext sessionVariables =
 resolveActionMutationSync
   :: ( HasVersion
      , MonadReusability m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader r m
      , MonadIO m
      , Has FieldMap r
@@ -156,7 +156,7 @@ table provides the action response. See Note [Resolving async action query/subsc
 
 -- | Resolve asynchronous action mutation which returns only the action uuid
 resolveActionMutationAsync
-  :: ( MonadError QErr m, MonadReader r m
+  :: ( MonadError (QErr a) m, MonadReader r m
      , Has [HTTP.Header] r
      )
   => Field
@@ -194,7 +194,7 @@ action's type. Here, we treat the "output" field as a computed field to hdb_acti
 
 resolveAsyncActionQuery
   :: ( MonadReusability m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader r m
      , Has FieldMap r
      , Has OrdByCtx r
@@ -284,7 +284,7 @@ asyncActionsProcessor cacheRef pgPool httpManager = forever $ do
     getActionDefinition actionCache actionName =
       _aiDefinition <$> Map.lookup actionName actionCache
 
-    runTx :: (Monoid a) => Q.TxE QErr a -> IO a
+    runTx :: (Monoid a) => Q.TxE (QErr a) a -> IO a
     runTx q = do
       res <- runExceptT $ Q.runTx' pgPool q
       either mempty return res
@@ -308,12 +308,12 @@ asyncActionsProcessor cacheRef pgPool httpManager = forever $ do
             Left e                -> setError actionId e
             Right responsePayload -> setCompleted actionId $ J.toJSON responsePayload
 
-    setError :: UUID.UUID -> QErr -> IO ()
+    setError :: UUID.UUID -> (QErr a) -> IO ()
     setError actionId e =
       runTx $ setErrorQuery actionId e
 
     setErrorQuery
-      :: UUID.UUID -> QErr -> Q.TxE QErr ()
+      :: UUID.UUID -> (QErr a) -> Q.TxE (QErr a) ()
     setErrorQuery actionId e =
       Q.unitQE defaultTxErrorHandler [Q.sql|
         update hdb_catalog.hdb_action_log
@@ -326,7 +326,7 @@ asyncActionsProcessor cacheRef pgPool httpManager = forever $ do
       runTx $ setCompletedQuery actionId responsePayload
 
     setCompletedQuery
-      :: UUID.UUID -> J.Value -> Q.TxE QErr ()
+      :: UUID.UUID -> J.Value -> Q.TxE (QErr a) ()
     setCompletedQuery actionId responsePayload =
       Q.unitQE defaultTxErrorHandler [Q.sql|
         update hdb_catalog.hdb_action_log
@@ -335,7 +335,7 @@ asyncActionsProcessor cacheRef pgPool httpManager = forever $ do
       |] (Q.AltJ responsePayload, actionId) False
 
     undeliveredEventsQuery
-      :: Q.TxE QErr [ActionLogItem]
+      :: Q.TxE (QErr a) [ActionLogItem]
     undeliveredEventsQuery =
       map mapEvent <$> Q.listQE defaultTxErrorHandler [Q.sql|
         update hdb_catalog.hdb_action_log set status = 'processing'
@@ -358,7 +358,7 @@ asyncActionsProcessor cacheRef pgPool httpManager = forever $ do
     getUndeliveredEvents = runTx undeliveredEventsQuery
 
 callWebhook
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadError (QErr a) m)
   => HTTP.Manager
   -> GraphQLType
   -> [HTTP.Header]
@@ -397,7 +397,7 @@ callWebhook manager outputType reqHeaders confHeaders forwardClientHeaders resol
              let expectingArray = isListType outputType
                  addInternalToErr e = e{qeInternal = Just webhookResponseObject}
                  throw400Detail t = throwError $ addInternalToErr $ err400 Unexpected t
-             webhookResponse <- modifyQErr addInternalToErr $ decodeValue responseValue
+             webhookResponse <- modify(QErr a) addInternalToErr $ decodeValue responseValue
              case webhookResponse of
                AWRArray{} -> when (not expectingArray) $
                  throw400Detail "expecting object for action webhook response but got array"
@@ -409,7 +409,7 @@ callWebhook manager outputType reqHeaders confHeaders forwardClientHeaders resol
              ActionWebhookErrorResponse message maybeCode <-
                modifyErr ("webhook response: " <>) $ decodeValue responseValue
              let code = maybe Unexpected ActionWebhookCode maybeCode
-                 qErr = QErr [] responseStatus message code Nothing
+                 qErr = (QErr a) [] responseStatus message code Nothing
              throwError qErr
 
          | otherwise ->
@@ -431,7 +431,7 @@ mkJsonAggSelect =
 
 processOutputSelectionSet
   :: ( MonadReusability m
-     , MonadError QErr m
+     , MonadError (QErr a) m
      , MonadReader r m
      , Has FieldMap r
      , Has OrdByCtx r

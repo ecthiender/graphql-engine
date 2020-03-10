@@ -27,7 +27,7 @@ data PGDumpReqBody =
 $(deriveJSON (aesonDrop 3 snakeCase) ''PGDumpReqBody)
 
 execPGDump
-  :: (MonadError RTE.QErr m, MonadIO m)
+  :: forall c m. (MonadError (RTE.QErr c) m, MonadIO m, RTE.AsCodeHasura c)
   => PGDumpReqBody
   -> Q.ConnInfo
   -> m BL.ByteString
@@ -39,7 +39,7 @@ execPGDump b ci = do
       RTE.throw500 $ "error while executing pg_dump: " <> T.pack err
     Right dump -> return dump
   where
-    throwException :: (MonadError RTE.QErr m) => IOException -> m a
+    throwException :: (MonadError (RTE.QErr c) m, RTE.AsCodeHasura c) => IOException -> m a
     throwException _ = RTE.throw500 "internal exception while executing pg_dump"
 
     execProcess = do

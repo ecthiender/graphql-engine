@@ -71,7 +71,7 @@ buildCustomTypesSchema nonObjectTypeMap annotatedObjectTypes roleName =
       Map.elems annotatedObjectTypes
 
 annotateObjectType
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => TableCache -> NonObjectTypeMap -> ObjectTypeDefinition -> m AnnotatedObjectType
 annotateObjectType tableCache nonObjectTypeMap objectDefinition = do
   annotatedFields <-

@@ -194,7 +194,7 @@ type ValidatedSyntheticVariables = ValidatedVariables []
 -- | Checks if the provided arguments are valid values for their corresponding types.
 -- Generates SQL of the format "select 'v1'::t1, 'v2'::t2 ..."
 validateVariables
-  :: (Traversable f, MonadError QErr m, MonadIO m)
+  :: (Traversable f, MonadError (QErr a) m, MonadIO m)
   => PGExecCtx
   -> f (WithScalarType PGScalarValue)
   -> m (ValidatedVariables f)
@@ -245,7 +245,7 @@ $(J.deriveToJSON (J.aesonDrop 4 J.snakeCase) ''ReusableLiveQueryPlan)
 -- | Constructs a new execution plan for a live query and returns a reusable version of the plan if
 -- possible.
 buildLiveQueryPlan
-  :: ( MonadError QErr m
+  :: ( MonadError (QErr a) m
      , MonadReader r m
      , Has UserInfo r
      , MonadIO m
@@ -275,7 +275,7 @@ buildLiveQueryPlan pgExecCtx fieldAlias astUnresolved varTypes = do
   pure (plan, reusablePlan)
 
 reuseLiveQueryPlan
-  :: (MonadError QErr m, MonadIO m)
+  :: (MonadError (QErr a) m, MonadIO m)
   => PGExecCtx
   -> UserVars
   -> Maybe GH.VariableValues

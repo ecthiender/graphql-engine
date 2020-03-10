@@ -32,12 +32,12 @@ data Mutation
   , _mStrfyNum :: !Bool
   } deriving (Show, Eq)
 
-runMutation :: Mutation -> Q.TxE QErr EncJSON
+runMutation :: Mutation -> Q.TxE (QErr a) EncJSON
 runMutation mut =
   bool (mutateAndReturn mut) (mutateAndSel mut) $
     hasNestedFld $ _mOutput mut
 
-mutateAndReturn :: Mutation -> Q.TxE QErr EncJSON
+mutateAndReturn :: Mutation -> Q.TxE (QErr a) EncJSON
 mutateAndReturn (Mutation qt (cte, p) mutationOutput _ strfyNum) =
   encJFromBS . runIdentity . Q.getRow
     <$> Q.rawQE dmlTxErrorHandler (Q.fromBuilder $ toSQL selWith)
@@ -45,7 +45,7 @@ mutateAndReturn (Mutation qt (cte, p) mutationOutput _ strfyNum) =
   where
     selWith = mkMutationOutputExp qt Nothing cte mutationOutput strfyNum
 
-mutateAndSel :: Mutation -> Q.TxE QErr EncJSON
+mutateAndSel :: Mutation -> Q.TxE (QErr a) EncJSON
 mutateAndSel (Mutation qt q mutationOutput allCols strfyNum) = do
   -- Perform mutation and fetch unique columns
   MutateResp _ columnVals <- mutateAndFetchCols qt allCols q strfyNum
@@ -61,7 +61,7 @@ mutateAndFetchCols
   -> [PGColumnInfo]
   -> (S.CTE, DS.Seq Q.PrepArg)
   -> Bool
-  -> Q.TxE QErr (MutateResp TxtEncodedPGVal)
+  -> Q.TxE (QErr a) (MutateResp TxtEncodedPGVal)
 mutateAndFetchCols qt cols (cte, p) strfyNum =
   Q.getAltJ . runIdentity . Q.getRow
     <$> Q.rawQE dmlTxErrorHandler (Q.fromBuilder sql) (toList p) True
@@ -93,7 +93,7 @@ mutateAndFetchCols qt cols (cte, p) strfyNum =
 -- The generated values expression should be in order of columns;
 -- `SELECT ("row"::table).* VALUES (1, 'Robert', 23) AS "row"`.
 mkSelCTEFromColVals
-  :: (MonadError QErr m)
+  :: (MonadError (QErr a) m)
   => QualifiedTable -> [PGColumnInfo] -> [ColumnValues TxtEncodedPGVal] -> m S.CTE
 mkSelCTEFromColVals qt allCols colVals =
   S.CTESelect <$> case colVals of
