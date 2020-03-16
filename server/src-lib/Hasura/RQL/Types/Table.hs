@@ -342,11 +342,11 @@ isMutable :: (ViewInfo -> Bool) -> Maybe ViewInfo -> Bool
 isMutable _ Nothing   = True
 isMutable f (Just vi) = f vi
 
-mutableView :: (MonadError QErr m) => QualifiedTable
+mutableView :: (MonadError (QErr code) m, AsCodeHasura code) => QualifiedTable
             -> (ViewInfo -> Bool) -> Maybe ViewInfo
             -> T.Text -> m ()
 mutableView qt f mVI operation =
-  unless (isMutable f mVI) $ throw400 NotSupported $
+  unless (isMutable f mVI) $ throw400 (_NotSupported # ()) $
   "view " <> qt <<> " is not " <> operation
 
 data TableConfig

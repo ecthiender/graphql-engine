@@ -27,7 +27,7 @@ import           Hasura.SQL.Types
 
 addNonColumnFields
   :: ( ArrowChoice arr, Inc.ArrowDistribute arr, ArrowWriter (Seq CollectedInfo) arr
-     , ArrowKleisli m arr, MonadError QErr m )
+     , ArrowKleisli m arr, MonadError (QErr code) m, AsCodeHasura code)
   => ( HashMap QualifiedTable TableRawInfo
      , FieldInfoMap PGColumnInfo
      , [CatalogRelation]
@@ -131,7 +131,7 @@ mkComputedFieldMetadataObject (CatalogComputedField column _) =
 
 buildComputedField
   :: ( ArrowChoice arr, ArrowWriter (Seq CollectedInfo) arr
-     , ArrowKleisli m arr, MonadError QErr m )
+     , ArrowKleisli m arr, MonadError (QErr code) m, AsCodeHasura code)
   => (HashSet QualifiedTable, CatalogComputedField) `arr` Maybe ComputedFieldInfo
 buildComputedField = proc (trackedTableNames, computedField) -> do
   let CatalogComputedField column funcDefs = computedField

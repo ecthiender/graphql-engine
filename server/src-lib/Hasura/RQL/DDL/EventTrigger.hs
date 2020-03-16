@@ -17,6 +17,7 @@ module Hasura.RQL.DDL.EventTrigger
   , updateEventTriggerInCatalog
   ) where
 
+import Control.Lens ((#))
 import           Data.Aeson
 import           System.Environment      (lookupEnv)
 
@@ -48,7 +49,7 @@ getDropFuncSql op trn = "DROP FUNCTION IF EXISTS"
                         <> " CASCADE"
 
 mkAllTriggersQ
-  :: (MonadTx m, HasSQLGenCtx m)
+  :: (MonadTx code m, AsCodeHasura code, HasSQLGenCtx m)
   => TriggerName
   -> QualifiedTable
   -> [PGColumnInfo]
@@ -60,7 +61,7 @@ mkAllTriggersQ trn qt allCols fullspec = do
   onJust (tdDelete fullspec) (mkTriggerQ trn qt allCols DELETE)
 
 mkTriggerQ
-  :: (MonadTx m, HasSQLGenCtx m)
+  :: (MonadTx code m, AsCodeHasura code, HasSQLGenCtx m)
   => TriggerName
   -> QualifiedTable
   -> [PGColumnInfo]
@@ -114,15 +115,16 @@ mkTriggerQ trn qt allCols op (SubscribeOpSpec columns payload) = do
     opToQual = S.QualVar . opToTxt
     opToTxt = T.pack . show
 
-delTriggerQ :: TriggerName -> Q.TxE QErr ()
+delTriggerQ :: AsCodeHasura code => TriggerName -> Q.TxE (QErr code) ()
 delTriggerQ trn = mapM_ (\op -> Q.unitQE
                           defaultTxErrorHandler
                           (Q.fromText $ getDropFuncSql op trn) () False) [INSERT, UPDATE, DELETE]
 
 addEventTriggerToCatalog
-  :: QualifiedTable
+  :: AsCodeHasura code
+  => QualifiedTable
   -> EventTriggerConf
-  -> Q.TxE QErr ()
+  -> Q.TxE (QErr code) ()
 addEventTriggerToCatalog qt etc = do
   Q.unitQE defaultTxErrorHandler
          [Q.sql|
@@ -134,7 +136,7 @@ addEventTriggerToCatalog qt etc = do
     QualifiedObject sn tn = qt
     (EventTriggerConf name _ _ _ _ _) = etc
 
-delEventTriggerFromCatalog :: TriggerName -> Q.TxE QErr ()
+delEventTriggerFromCatalog :: AsCodeHasura code => TriggerName -> Q.TxE (QErr code) ()
 delEventTriggerFromCatalog trn = do
   Q.unitQE defaultTxErrorHandler [Q.sql|
            DELETE FROM
@@ -144,7 +146,7 @@ delEventTriggerFromCatalog trn = do
   delTriggerQ trn
   archiveEvents trn
 
-archiveEvents :: TriggerName -> Q.TxE QErr ()
+archiveEvents :: AsCodeHasura code => TriggerName -> Q.TxE (QErr code) ()
 archiveEvents trn = do
   Q.unitQE defaultTxErrorHandler [Q.sql|
            UPDATE hdb_catalog.event_log
@@ -152,7 +154,7 @@ archiveEvents trn = do
            WHERE trigger_name = $1
                 |] (Identity trn) False
 
-fetchEvent :: EventId -> Q.TxE QErr (EventId, Bool)
+fetchEvent :: AsCodeHasura code => EventId -> Q.TxE (QErr code) (EventId, Bool)
 fetchEvent eid = do
   events <- Q.listQE defaultTxErrorHandler
             [Q.sql|
@@ -166,13 +168,13 @@ fetchEvent eid = do
   assertEventUnlocked event
   return event
   where
-    getEvent []    = throw400 NotExists "event not found"
+    getEvent []    = throw400 (_NotExists # ()) "event not found"
     getEvent (x:_) = return x
 
     assertEventUnlocked (_, locked) = when locked $
-      throw400 Busy "event is already being processed"
+      throw400 (_Busy # ()) "event is already being processed"
 
-markForDelivery :: EventId -> Q.TxE QErr ()
+markForDelivery :: AsCodeHasura code => EventId -> Q.TxE (QErr code) ()
 markForDelivery eid =
   Q.unitQE defaultTxErrorHandler [Q.sql|
           UPDATE hdb_catalog.event_log
@@ -183,13 +185,13 @@ markForDelivery eid =
           WHERE id = $1
           |] (Identity eid) True
 
-subTableP1 :: (UserInfoM m, QErrM m, CacheRM m) => CreateEventTriggerQuery -> m (QualifiedTable, Bool, EventTriggerConf)
+subTableP1 :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m) => CreateEventTriggerQuery -> m (QualifiedTable, Bool, EventTriggerConf)
 subTableP1 (CreateEventTriggerQuery name qt insert update delete enableManual retryConf webhook webhookFromEnv mheaders replace) = do
   ti <- askTableCoreInfo qt
   -- can only replace for same table
   when replace $ do
     ti' <- _tiCoreInfo <$> askTabInfoFromTrigger name
-    when (_tciName ti' /= _tciName ti) $ throw400 NotSupported "cannot replace table or schema for trigger"
+    when (_tciName ti' /= _tciName ti) $ throw400 (_NotSupported # ()) "cannot replace table or schema for trigger"
 
   assertCols ti insert
   assertCols ti update
@@ -206,7 +208,7 @@ subTableP1 (CreateEventTriggerQuery name qt insert update delete enableManual re
         SubCArray pgcols -> forM_ pgcols (assertPGCol (_tciFieldInfoMap ti) "")
 
 subTableP2Setup
-  :: (QErrM m, MonadIO m)
+  :: (QErrM m code, AsCodeHasura code, MonadIO m)
   => QualifiedTable -> EventTriggerConf -> m (EventTriggerInfo, [SchemaDependency])
 subTableP2Setup qt (EventTriggerConf name def webhook webhookFromEnv rconf mheaders) = do
   webhookConf <- case (webhook, webhookFromEnv) of
@@ -241,14 +243,14 @@ getTrigDefDeps qt (TriggerOpsDef mIns mUpd mDel _) =
       SubCArray pgcols -> pgcols
 
 subTableP2
-  :: (MonadTx m)
+  :: (MonadTx code m, AsCodeHasura code)
   => QualifiedTable -> Bool -> EventTriggerConf -> m ()
 subTableP2 qt replace etc = liftTx if replace
   then updateEventTriggerInCatalog etc
   else addEventTriggerToCatalog qt etc
 
 runCreateEventTriggerQuery
-  :: (QErrM m, UserInfoM m, CacheRWM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRWM m, MonadTx code m)
   => CreateEventTriggerQuery -> m EncJSON
 runCreateEventTriggerQuery q = do
   (qt, replace, etc) <- subTableP1 q
@@ -257,7 +259,7 @@ runCreateEventTriggerQuery q = do
   return successMsg
 
 runDeleteEventTriggerQuery
-  :: (MonadTx m, CacheRWM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m)
   => DeleteEventTriggerQuery -> m EncJSON
 runDeleteEventTriggerQuery (DeleteEventTriggerQuery name) = do
   liftTx $ delEventTriggerFromCatalog name
@@ -265,7 +267,7 @@ runDeleteEventTriggerQuery (DeleteEventTriggerQuery name) = do
   pure successMsg
 
 deliverEvent
-  :: (QErrM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, MonadTx code m)
   => RedeliverEventQuery -> m EncJSON
 deliverEvent (RedeliverEventQuery eventId) = do
   _ <- liftTx $ fetchEvent eventId
@@ -273,15 +275,16 @@ deliverEvent (RedeliverEventQuery eventId) = do
   return successMsg
 
 runRedeliverEvent
-  :: (MonadTx m)
+  :: (MonadTx code m, AsCodeHasura code)
   => RedeliverEventQuery -> m EncJSON
 runRedeliverEvent = deliverEvent
 
 insertManualEvent
-  :: QualifiedTable
+  :: AsCodeHasura code
+  => QualifiedTable
   -> TriggerName
   -> Value
-  -> Q.TxE QErr EventId
+  -> Q.TxE (QErr code) EventId
 insertManualEvent qt trn rowData = do
   let op = T.pack $ show MANUAL
   eids <- map runIdentity <$> Q.listQE defaultTxErrorHandler [Q.sql|
@@ -294,7 +297,7 @@ insertManualEvent qt trn rowData = do
     getEid (x:_) = return x
 
 runInvokeEventTrigger
-  :: (QErrM m, CacheRM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m, MonadTx code m)
   => InvokeEventTriggerQuery -> m EncJSON
 runInvokeEventTrigger (InvokeEventTriggerQuery name payload) = do
   trigInfo <- askEventTriggerInfo name
@@ -305,14 +308,14 @@ runInvokeEventTrigger (InvokeEventTriggerQuery name payload) = do
   where
     assertManual (TriggerOpsDef _ _ _ man) = case man of
       Just True -> return ()
-      _         -> throw400 NotSupported "manual mode is not enabled for event trigger"
+      _         -> throw400 (_NotSupported # ()) "manual mode is not enabled for event trigger"
 
 getHeaderInfosFromConf
-  :: (QErrM m, MonadIO m)
+  :: (QErrM m code, AsCodeHasura code, MonadIO m)
   => [HeaderConf] -> m [EventHeaderInfo]
 getHeaderInfosFromConf = mapM getHeader
   where
-    getHeader :: (QErrM m, MonadIO m) => HeaderConf -> m EventHeaderInfo
+    getHeader :: (QErrM m code, AsCodeHasura code, MonadIO m) => HeaderConf -> m EventHeaderInfo
     getHeader hconf = case hconf of
       (HeaderConf _ (HVValue val)) -> return $ EventHeaderInfo hconf val
       (HeaderConf _ (HVEnv val))   -> do
@@ -320,23 +323,24 @@ getHeaderInfosFromConf = mapM getHeader
         return $ EventHeaderInfo hconf envVal
 
 getWebhookInfoFromConf
-  :: (QErrM m, MonadIO m) => WebhookConf -> m WebhookConfInfo
+  :: (QErrM m code, AsCodeHasura code, MonadIO m) => WebhookConf -> m WebhookConfInfo
 getWebhookInfoFromConf wc = case wc of
   WCValue w -> return $ WebhookConfInfo wc w
   WCEnv we -> do
     envVal <- getEnv we
     return $ WebhookConfInfo wc envVal
 
-getEnv :: (QErrM m, MonadIO m) => T.Text -> m T.Text
+getEnv :: (QErrM m code, AsCodeHasura code, MonadIO m) => T.Text -> m T.Text
 getEnv env = do
   mEnv <- liftIO $ lookupEnv (T.unpack env)
   case mEnv of
-    Nothing     -> throw400 NotFound $ "environment variable '" <> env <> "' not set"
+    Nothing     -> throw400 (_NotFound # ()) $ "environment variable '" <> env <> "' not set"
     Just envVal -> return (T.pack envVal)
 
 getEventTriggerDef
-  :: TriggerName
-  -> Q.TxE QErr (QualifiedTable, EventTriggerConf)
+  :: AsCodeHasura code
+  => TriggerName
+  -> Q.TxE (QErr code) (QualifiedTable, EventTriggerConf)
 getEventTriggerDef triggerName = do
   (sn, tn, Q.AltJ etc) <- Q.getRow <$> Q.withQE defaultTxErrorHandler
     [Q.sql|
@@ -345,7 +349,7 @@ getEventTriggerDef triggerName = do
            |] (Identity triggerName) False
   return (QualifiedObject sn tn, etc)
 
-updateEventTriggerInCatalog :: EventTriggerConf -> Q.TxE QErr ()
+updateEventTriggerInCatalog :: AsCodeHasura code => EventTriggerConf -> Q.TxE (QErr code) ()
 updateEventTriggerInCatalog trigConf =
   Q.unitQE defaultTxErrorHandler
     [Q.sql|

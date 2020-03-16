@@ -58,7 +58,7 @@ mkDeleteCTE (AnnDel tn (fltr, wc) _ _) =
                 toSQLBoolExp (S.QualTable tn) $ andAnnBoolExps fltr wc
 
 validateDeleteQWith
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => SessVarBldr m
   -> (PGColumnType -> Value -> m S.SQLExp)
   -> DeleteQuery
@@ -107,12 +107,12 @@ validateDeleteQWith sessVarBldr prepValBldr
       <> "without \"select\" permission on the table"
 
 validateDeleteQ
-  :: (QErrM m, UserInfoM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m)
   => DeleteQuery -> m (AnnDel, DS.Seq Q.PrepArg)
 validateDeleteQ =
   runDMLP1T . validateDeleteQWith sessVarFromCurrentSetting binRHSBuilder
 
-deleteQueryToTx :: Bool -> (AnnDel, DS.Seq Q.PrepArg) -> Q.TxE QErr EncJSON
+deleteQueryToTx :: AsCodeHasura code => Bool -> (AnnDel, DS.Seq Q.PrepArg) -> Q.TxE (QErr code) EncJSON
 deleteQueryToTx strfyNum (u, p) =
   runMutation $ Mutation (dqp1Table u) (deleteCTE, p)
                 (dqp1Output u) (dqp1AllCols u) strfyNum
@@ -120,7 +120,7 @@ deleteQueryToTx strfyNum (u, p) =
     deleteCTE = mkDeleteCTE u
 
 runDelete
-  :: (QErrM m, UserInfoM m, CacheRM m, MonadTx m, HasSQLGenCtx m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m, MonadTx code m, HasSQLGenCtx m)
   => DeleteQuery -> m EncJSON
 runDelete q = do
   strfyNum <- stringifyNum <$> askSQLGenCtx

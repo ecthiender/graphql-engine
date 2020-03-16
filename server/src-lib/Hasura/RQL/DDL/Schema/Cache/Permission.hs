@@ -10,6 +10,7 @@ import           Hasura.Prelude
 import qualified Data.HashMap.Strict.Extended       as M
 import qualified Data.Sequence                      as Seq
 
+import Control.Lens ((#))
 import           Control.Arrow.Extended
 import           Data.Aeson
 
@@ -25,7 +26,8 @@ import           Hasura.SQL.Types
 
 buildTablePermissions
   :: ( ArrowChoice arr, Inc.ArrowDistribute arr, Inc.ArrowCache m arr
-     , ArrowWriter (Seq CollectedInfo) arr, MonadTx m )
+     , ArrowWriter (Seq CollectedInfo) arr, MonadTx code m, AsCodeHasura code
+     )
   => ( Inc.Dependency TableCoreCache
      , QualifiedTable
      , FieldInfoMap FieldInfo
@@ -64,7 +66,7 @@ mkPermissionMetadataObject (CatalogPermission qt rn pt pDef cmnt) =
 
 withPermission
   :: (ArrowChoice arr, ArrowWriter (Seq CollectedInfo) arr)
-  => WriterA (Seq SchemaDependency) (ErrorA QErr arr) (a, s) b
+  => WriterA (Seq SchemaDependency) (ErrorA (QErr code) arr) (a, s) b
   -> arr (a, (CatalogPermission, s)) (Maybe b)
 withPermission f = proc (e, (permission, s)) -> do
   let CatalogPermission tableName roleName permType _ _ = permission
@@ -81,7 +83,8 @@ withPermission f = proc (e, (permission, s)) -> do
 buildPermission
   :: ( ArrowChoice arr, Inc.ArrowCache m arr
      , ArrowWriter (Seq CollectedInfo) arr
-     , MonadTx m, IsPerm a, FromJSON a
+     , MonadTx code m, IsPerm a, FromJSON a
+     , AsCodeHasura code
      )
   => ( Inc.Dependency TableCoreCache
      , QualifiedTable
@@ -93,7 +96,7 @@ buildPermission = Inc.cache proc (tableCache, tableName, tableFields, permission
   >-> (| traverseA (\permission@(CatalogPermission _ roleName _ pDef _) ->
          (| withPermission (do
               bindErrorA -< when (roleName == adminRole) $
-                throw400 ConstraintViolation "cannot define permission for admin role"
+                throw400 (_ConstraintViolation # ()) "cannot define permission for admin role"
               perm <- bindErrorA -< decodeValue pDef
               let permDef = PermDef roleName perm Nothing
               (info, dependencies) <- liftEitherA <<< Inc.bindDepend -< runExceptT $

@@ -137,7 +137,7 @@ mkMutationOutputExp qt preCalAffRows cte mutOutput strfyNum =
 
 
 checkRetCols
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => FieldInfoMap FieldInfo
   -> SelPermInfo
   -> [PGCol]

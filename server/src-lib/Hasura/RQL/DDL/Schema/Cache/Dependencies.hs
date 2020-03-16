@@ -21,7 +21,7 @@ import           Hasura.SQL.Types
 -- ensure the dependencies actually exist. If a dependency is missing, its transitive dependents are
 -- removed from the cache, and 'InconsistentMetadata's are returned.
 resolveDependencies
-  :: (ArrowKleisli m arr, QErrM m)
+  :: (ArrowKleisli m arr, QErrM m code, AsCodeHasura code)
   => ( BuildOutputs
      , [(MetadataObject, SchemaObjId, SchemaDependency)]
      ) `arr` (BuildOutputs, [InconsistentMetadata], DepMap)
@@ -46,7 +46,7 @@ resolveDependencies = arrM \(cache, dependencies) -> do
 -- graphs between schema objects are unlikely to be very deep, it will usually terminate in just
 -- a few iterations.
 performIteration
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => Int
   -> BuildOutputs
   -> [InconsistentMetadata]
@@ -65,7 +65,7 @@ performIteration iterationNumber cache inconsistencies dependencies = do
           -- Running for 100 iterations without terminating is (hopefully) enormously unlikely
           -- unless we did something very wrong, so halt the process and abort with some
           -- debugging information.
-          throwError (err500 Unexpected "schema dependency resolution failed to terminate")
+          throwError (err500 (_Unexpected # ()) "schema dependency resolution failed to terminate")
             { qeInternal = Just $ object
                 [ "inconsistent_objects" .= object
                   [ "old" .= inconsistencies

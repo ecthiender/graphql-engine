@@ -42,7 +42,7 @@ data QueryParts
   } deriving (Show, Eq)
 
 getTypedOp
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => Maybe OperationName
   -> [G.SelectionSet]
   -> [G.TypedOperationDefinition]
@@ -69,7 +69,7 @@ getTypedOp opNameM selSets opDefs =
 -- | For all the variables defined there will be a value in the final map
 -- If no default, not in variables and nullable, then null value
 validateVariables
-  :: (MonadReader r m, Has TypeMap r, MonadError (QErr a) m)
+  :: (MonadReader r m, Has TypeMap r, MonadError (QErr code) m, AsCodeHasura code)
   => [G.VariableDefinition] -> VariableValues -> m AnnVarVals
 validateVariables varDefsL inpVals = withPathK "variableValues" $ do
   varDefs <- onLeft (mkMapWith G._vdVariable varDefsL) $ \dups ->
@@ -113,7 +113,7 @@ showVars = showNames . fmap G.unVariable
 -- information to parse Postgres values directly for use with a reusable query plan. (Ideally, it
 -- would be nice to be able to share more of the logic instead of duplicating it.)
 validateVariablesForReuse
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => ReusableVariableTypes -> Maybe VariableValues -> m ReusableVariableValues
 validateVariablesForReuse (ReusableVariableTypes varTypes) varValsM =
   withPathK "variableValues" $ do
@@ -132,7 +132,7 @@ validateVariablesForReuse (ReusableVariableTypes varTypes) varValsM =
       varVals = fromMaybe Map.empty varValsM
 
 validateFrag
-  :: (MonadError (QErr a) m, MonadReader r m, Has TypeMap r)
+  :: (MonadError (QErr code) m, AsCodeHasura code, MonadReader r m, Has TypeMap r)
   => G.FragmentDefinition -> m FragDef
 validateFrag (G.FragmentDefinition n onTy dirs selSet) = do
   unless (null dirs) $ throwVE
@@ -149,7 +149,13 @@ data RootSelSet
   deriving (Show, Eq)
 
 validateGQ
-  :: (MonadError (QErr a) m, MonadReader GCtx m, MonadReusability m) => QueryParts -> m RootSelSet
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
+     , MonadReader GCtx m
+     , MonadReusability m
+     )
+  => QueryParts
+  -> m RootSelSet
 validateGQ (QueryParts opDef opRoot fragDefsL varValsM) = do
   ctx <- ask
 
@@ -186,7 +192,7 @@ isQueryInAllowlist q = HS.member gqlQuery
                unGQLExecDoc q
 
 getQueryParts
-  :: ( MonadError (QErr a) m, MonadReader GCtx m)
+  :: ( MonadError (QErr code) m, AsCodeHasura code, MonadReader GCtx m)
   => GQLReqParsed
   -> m QueryParts
 getQueryParts (GQLReq opNameM q varValsM) = do

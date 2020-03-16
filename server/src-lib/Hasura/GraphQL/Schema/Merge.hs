@@ -4,6 +4,7 @@ module Hasura.GraphQL.Schema.Merge
   ) where
 
 
+import           Control.Lens                  (( # ))
 import           Data.Maybe                    (maybeToList)
 
 import qualified Data.HashMap.Strict           as Map
@@ -16,7 +17,7 @@ import           Hasura.Prelude
 import           Hasura.RQL.Types
 
 checkSchemaConflicts
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => GCtx -> GCtx -> m ()
 checkSchemaConflicts gCtx remoteCtx = do
   let typeMap     = _gTypes gCtx -- hasura typemap
@@ -40,7 +41,7 @@ checkSchemaConflicts gCtx remoteCtx = do
       conflictedTyNames = map G.unNamedType $ Map.keys conflictedTypes
 
   unless (Map.null conflictedTypes) $
-    throw400 RemoteSchemaConflicts $ tyMsg conflictedTyNames
+    throw400 (_RemoteSchemaConflicts # ()) $ tyMsg conflictedTyNames
 
   -- check node conflicts
   let rmQRoot = _otiFields $ _gQueryRoot remoteCtx
@@ -57,7 +58,7 @@ checkSchemaConflicts gCtx remoteCtx = do
     (Just rmR, Just hR) -> do
       let conflictedNodes = filter (`elem` hR) rmR
       unless (null conflictedNodes) $
-        throw400 RemoteSchemaConflicts $ nodesMsg conflictedNodes
+        throw400 (_RemoteSchemaConflicts # ()) $ nodesMsg conflictedNodes
     _ -> return ()
 
   where
@@ -92,7 +93,7 @@ checkSchemaConflicts gCtx remoteCtx = do
                 ]
 
 checkConflictingNode
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => GCtx
   -> G.Name
   -> m ()
@@ -106,7 +107,7 @@ checkConflictingNode gCtx node = do
   case hRoots of
     Just hR ->
       when (node `elem` hR) $
-        throw400 RemoteSchemaConflicts msg
+        throw400 (_RemoteSchemaConflicts # ()) msg
     _ -> return ()
   where
     hQRName = G.NamedType "query_root"

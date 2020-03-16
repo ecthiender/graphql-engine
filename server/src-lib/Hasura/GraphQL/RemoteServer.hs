@@ -1,7 +1,7 @@
 module Hasura.GraphQL.RemoteServer where
 
 import           Control.Exception             (try)
-import           Control.Lens                  ((^.))
+import           Control.Lens                  (( # ), (^.))
 import           Data.Aeson                    ((.:), (.:?))
 import           Data.FileEmbed                (embedStringFile)
 import           Data.Foldable                 (foldlM)
@@ -31,7 +31,7 @@ introspectionQuery :: BL.ByteString
 introspectionQuery = $(embedStringFile "src-rsr/introspection.json")
 
 fetchRemoteSchema
-  :: (HasVersion, MonadIO m, MonadError (QErr a) m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m, AsCodeHasura code)
   => HTTP.Manager
   -> RemoteSchemaName
   -> RemoteSchemaInfo
@@ -68,21 +68,21 @@ fetchRemoteSchema manager name def@(RemoteSchemaInfo url headerConf _ timeout) =
   let mRmQR = VT.getObjTyM qrTyp
       mRmMR = join $ VT.getObjTyM <$> mMrTyp
       mRmSR = join $ VT.getObjTyM <$> mSrTyp
-  rmQR <- liftMaybe (err400 Unexpected "query root has to be an object type") mRmQR
+  rmQR <- liftMaybe (err400 (_Unexpected # ()) "query root has to be an object type") mRmQR
   return $ GC.RemoteGCtx typMap rmQR mRmMR mRmSR
 
   where
-    noQueryRoot = err400 Unexpected "query root not found in remote schema"
-    remoteSchemaErr :: (MonadError (QErr a) m) => T.Text -> m a
-    remoteSchemaErr = throw400 RemoteSchemaError
+    noQueryRoot = err400 (_Unexpected # ()) "query root not found in remote schema"
+    remoteSchemaErr :: (MonadError (QErr code) m, AsCodeHasura code) => T.Text -> m a
+    remoteSchemaErr = throw400 (_RemoteSchemaError # ())
 
-    throwHttpErr :: (MonadError (QErr a) m) => HTTP.HttpException -> m a
+    throwHttpErr :: (MonadError (QErr code) m, AsCodeHasura code) => HTTP.HttpException -> m a
     throwHttpErr = throwWithInternal httpExceptMsg . httpExceptToJSON
 
     throwNon200 st = throwWithInternal (non200Msg st) . decodeNon200Resp
 
     throwWithInternal msg v =
-      let err = err400 RemoteSchemaError $ T.pack msg
+      let err = err400 (_RemoteSchemaError # ()) $ T.pack msg
       in throwError err{qeInternal = Just $ J.toJSON v}
 
     httpExceptMsg =
@@ -96,7 +96,7 @@ fetchRemoteSchema manager name def@(RemoteSchemaInfo url headerConf _ timeout) =
       Left _  -> J.object ["raw_body" J..= bsToTxt (BL.toStrict bs)]
 
 mergeSchemas
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => RemoteSchemaMap
   -> GS.GCtxMap
   -- the merged GCtxMap and the default GCtx without roles
@@ -109,14 +109,14 @@ mergeSchemas rmSchemaMap gCtxMap = do
     remoteSchemas = map rscGCtx $ Map.elems rmSchemaMap
 
 mkDefaultRemoteGCtx
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => [GC.RemoteGCtx] -> m GS.GCtx
 mkDefaultRemoteGCtx =
   foldlM (\combG -> mergeGCtx combG . convRemoteGCtx) GC.emptyGCtx
 
 -- merge a remote schema `gCtx` into current `gCtxMap`
 mergeRemoteSchema
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => GS.GCtxMap
   -> GS.GCtx
   -> m GS.GCtxMap
@@ -127,7 +127,7 @@ mergeRemoteSchema ctxMap mergedRemoteGCtx = do
   return $ Map.fromList res
 
 mergeGCtx
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => GS.GCtx
   -> GS.GCtx
   -> m GS.GCtx

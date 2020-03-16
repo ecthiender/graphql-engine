@@ -7,12 +7,13 @@ module Hasura.RQL.DDL.Deps
        )
        where
 
-import           Hasura.Prelude
+import           Control.Lens      (( # ))
 
 import qualified Data.HashSet      as HS
 import qualified Data.Text         as T
 import qualified Database.PG.Query as Q
 
+import           Hasura.Prelude
 import           Hasura.RQL.Types
 import           Hasura.SQL.Types
 
@@ -25,20 +26,20 @@ purgeRel (QualifiedObject sn tn) rn =
                    AND rel_name = $3
                 |] (sn, tn, rn) False
 
-reportDeps :: (QErrM m) => [SchemaObjId] -> m ()
+reportDeps :: (QErrM m code, AsCodeHasura code) => [SchemaObjId] -> m ()
 reportDeps deps =
-  throw400 DependencyError $
+  throw400 (_DependencyError # ()) $
     "cannot drop due to the following dependent objects : "
      <> reportSchemaObjs deps
 
-reportDepsExt :: (QErrM m) => [SchemaObjId] -> [T.Text] -> m ()
+reportDepsExt :: (QErrM m code, AsCodeHasura code) => [SchemaObjId] -> [T.Text] -> m ()
 reportDepsExt deps unknownDeps =
-  throw400 DependencyError $
+  throw400 (_DependencyError # ()) $
     "cannot drop due to the following dependent objects : " <> depObjsTxt
   where
     depObjsTxt = T.intercalate ", " (reportSchemaObjs deps:unknownDeps)
 
-parseDropNotice :: (QErrM m ) => T.Text -> m [Either T.Text SchemaObjId]
+parseDropNotice :: (QErrM m code, AsCodeHasura code) => T.Text -> m [Either T.Text SchemaObjId]
 parseDropNotice t = do
   cascadeLines <- getCascadeLines
   mapM parseCascadeLine cascadeLines
@@ -47,7 +48,7 @@ parseDropNotice t = do
       case T.split (=='.') dt of
         [tn]     -> return $ QualifiedObject publicSchema $ TableName tn
         [sn, tn] -> return $ QualifiedObject (SchemaName sn) $ TableName tn
-        _        -> throw400 ParseFailed $ "parsing dotted table failed : " <> dt
+        _        -> throw400 (_ParseFailed # ()) $ "parsing dotted table failed : " <> dt
 
     getCascadeLines = do
       detailLines <- case T.stripPrefix "NOTICE:" t of
@@ -77,7 +78,7 @@ parseDropNotice t = do
             _       -> throw500 $ "failed to parse constraint cascade line : " <> cl
       | otherwise = return $ Left cl
 
-getPGDeps :: Q.Tx () -> Q.TxE QErr [Either T.Text SchemaObjId]
+getPGDeps :: AsCodeHasura code => Q.Tx () -> Q.TxE (QErr code) [Either T.Text SchemaObjId]
 getPGDeps tx = do
   dropNotices <- Q.catchE defaultTxErrorHandler $ do
     Q.unitQ "SAVEPOINT hdb_get_pg_deps" () False
@@ -91,7 +92,7 @@ getPGDeps tx = do
     _        -> throw500 "unexpected number of notices when getting dependencies"
 
 getIndirectDeps
-  :: (CacheRM m, MonadTx m)
+  :: (CacheRM m, MonadTx code m, AsCodeHasura code)
   => [SchemaObjId] -> Q.Tx ()
   -> m ([SchemaObjId], [T.Text])
 getIndirectDeps initDeps tx = do

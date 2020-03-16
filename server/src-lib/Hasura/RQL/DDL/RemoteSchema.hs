@@ -9,6 +9,8 @@ module Hasura.RQL.DDL.RemoteSchema
   , addRemoteSchemaP2
   ) where
 
+import           Control.Lens                (( # ))
+
 import           Hasura.EncJSON
 import           Hasura.Prelude
 
@@ -24,11 +26,12 @@ import           Hasura.SQL.Types
 
 runAddRemoteSchema
   :: ( HasVersion
-     , QErrM m
+     , QErrM m code
      , CacheRWM m
-     , MonadTx m
+     , MonadTx code m
      , MonadIO m
      , HasHttpManager m
+     , AsCodeHasura code
      )
   => AddRemoteSchemaQuery -> m EncJSON
 runAddRemoteSchema q = do
@@ -40,16 +43,16 @@ runAddRemoteSchema q = do
     name = _arsqName q
 
 addRemoteSchemaP1
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => RemoteSchemaName -> m ()
 addRemoteSchemaP1 name = do
   remoteSchemaMap <- scRemoteSchemas <$> askSchemaCache
   onJust (Map.lookup name remoteSchemaMap) $ const $
-    throw400 AlreadyExists $ "remote schema with name "
+    throw400 (_AlreadyExists # ()) $ "remote schema with name "
     <> name <<> " already exists"
 
 addRemoteSchemaP2Setup
-  :: (HasVersion, QErrM m, MonadIO m, HasHttpManager m)
+  :: (HasVersion, QErrM m code, AsCodeHasura code, MonadIO m, HasHttpManager m)
   => AddRemoteSchemaQuery -> m RemoteSchemaCtx
 addRemoteSchemaP2Setup (AddRemoteSchemaQuery name def _) = do
   httpMgr <- askHttpManager
@@ -58,13 +61,13 @@ addRemoteSchemaP2Setup (AddRemoteSchemaQuery name def _) = do
   pure $ RemoteSchemaCtx name gCtx rsi
 
 addRemoteSchemaP2
-  :: (HasVersion, MonadTx m, MonadIO m, HasHttpManager m) => AddRemoteSchemaQuery -> m ()
+  :: (HasVersion, MonadTx code m, AsCodeHasura code, MonadIO m, HasHttpManager m) => AddRemoteSchemaQuery -> m ()
 addRemoteSchemaP2 q = do
   void $ addRemoteSchemaP2Setup q
   liftTx $ addRemoteSchemaToCatalog q
 
 runRemoveRemoteSchema
-  :: (QErrM m, UserInfoM m, CacheRWM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRWM m, MonadTx code m)
   => RemoteSchemaNameQuery -> m EncJSON
 runRemoveRemoteSchema (RemoteSchemaNameQuery rsn) = do
   removeRemoteSchemaP1 rsn
@@ -73,29 +76,27 @@ runRemoveRemoteSchema (RemoteSchemaNameQuery rsn) = do
   pure successMsg
 
 removeRemoteSchemaP1
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => RemoteSchemaName -> m ()
 removeRemoteSchemaP1 rsn = do
   sc <- askSchemaCache
   let rmSchemas = scRemoteSchemas sc
   void $ onNothing (Map.lookup rsn rmSchemas) $
-    throw400 NotExists "no such remote schema"
+    throw400 (_NotExists # ()) "no such remote schema"
 
 runReloadRemoteSchema
-  :: (QErrM m, CacheRWM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRWM m)
   => RemoteSchemaNameQuery -> m EncJSON
 runReloadRemoteSchema (RemoteSchemaNameQuery name) = do
   rmSchemas <- scRemoteSchemas <$> askSchemaCache
   void $ onNothing (Map.lookup name rmSchemas) $
-    throw400 NotExists $ "remote schema with name " <> name <<> " does not exist"
+    throw400 (_NotExists # ()) $ "remote schema with name " <> name <<> " does not exist"
 
   let invalidations = mempty { ciRemoteSchemas = S.singleton name }
   withNewInconsistentObjsCheck $ buildSchemaCacheWithOptions CatalogUpdate invalidations
   pure successMsg
 
-addRemoteSchemaToCatalog
-  :: AddRemoteSchemaQuery
-  -> Q.TxE QErr ()
+addRemoteSchemaToCatalog :: AsCodeHasura code => AddRemoteSchemaQuery -> Q.TxE (QErr code) ()
 addRemoteSchemaToCatalog (AddRemoteSchemaQuery name def comment) =
   Q.unitQE defaultTxErrorHandler [Q.sql|
     INSERT into hdb_catalog.remote_schemas
@@ -103,14 +104,14 @@ addRemoteSchemaToCatalog (AddRemoteSchemaQuery name def comment) =
       VALUES ($1, $2, $3)
   |] (name, Q.AltJ $ J.toJSON def, comment) True
 
-removeRemoteSchemaFromCatalog :: RemoteSchemaName -> Q.TxE QErr ()
+removeRemoteSchemaFromCatalog :: AsCodeHasura code => RemoteSchemaName -> Q.TxE (QErr code) ()
 removeRemoteSchemaFromCatalog name =
   Q.unitQE defaultTxErrorHandler [Q.sql|
     DELETE FROM hdb_catalog.remote_schemas
       WHERE name = $1
   |] (Identity name) True
 
-fetchRemoteSchemas :: Q.TxE QErr [AddRemoteSchemaQuery]
+fetchRemoteSchemas :: AsCodeHasura code => Q.TxE (QErr code) [AddRemoteSchemaQuery]
 fetchRemoteSchemas =
   map fromRow <$> Q.listQE defaultTxErrorHandler
     [Q.sql|

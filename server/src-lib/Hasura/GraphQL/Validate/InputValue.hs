@@ -36,8 +36,10 @@ pVal :: (Monad m) => a -> m (P a)
 pVal = return . P . Just . Right
 
 resolveVar
-  :: ( MonadError (QErr a) m
-     , MonadReader ValidationCtx m)
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
+     , MonadReader ValidationCtx m
+     )
   => G.Variable -> m AnnInpVal
 resolveVar var = do
   varVals <- _vcVarVals <$> ask
@@ -46,7 +48,8 @@ resolveVar var = do
     <> showName (G.unVariable var)
 
 pVar
-  :: ( MonadError (QErr a) m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader ValidationCtx m)
   => G.Variable -> m (P a)
 pVar var = do
@@ -61,7 +64,7 @@ data InputValueParser a m
   , getEnum   :: a -> m (P G.EnumValue)
   }
 
-jsonParser :: (MonadError (QErr a) m) => InputValueParser J.Value m
+jsonParser :: (MonadError (QErr code) m, AsCodeHasura code) => InputValueParser J.Value m
 jsonParser =
   InputValueParser jScalar jList jObject jEnum
   where
@@ -80,7 +83,7 @@ jsonParser =
     jScalar J.Null = pNull
     jScalar v      = pVal v
 
-toJValue :: (MonadError (QErr a) m) => G.Value -> m J.Value
+toJValue :: (MonadError (QErr code) m, AsCodeHasura code) => G.Value -> m J.Value
 toJValue = \case
   G.VVariable _                   ->
     throwVE "variables are not allowed in scalars"
@@ -98,7 +101,8 @@ toJValue = \case
     toTup (G.ObjectFieldG f v) = (f,) <$> toJValue v
 
 valueParser
-  :: ( MonadError (QErr a) m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader ValidationCtx m)
   => InputValueParser G.Value m
 valueParser =
@@ -161,7 +165,7 @@ toJValueC = \case
   where
     toTup (G.ObjectFieldG f v) = (f, toJValueC v)
 
-constValueParser :: (MonadError (QErr a) m) => InputValueParser G.ValueConst m
+constValueParser :: (MonadError (QErr code) m, AsCodeHasura code) => InputValueParser G.ValueConst m
 constValueParser =
   InputValueParser pScalar pList pObject pEnum
   where
@@ -189,7 +193,8 @@ constValueParser =
 
 validateObject
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      )
   => InputValueParser a m
   -> InpObjTyInfo -> [(G.Name, a)] -> m AnnGObject
@@ -233,7 +238,9 @@ validateObject valParser tyInfo flds = do
 
 validateNamedTypeVal
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => InputValueParser a m
   -> (G.Nullability, G.NamedType) -> a -> m AnnInpVal
 validateNamedTypeVal inpValParser (nullability, nt) val = do
@@ -275,7 +282,7 @@ validateNamedTypeVal inpValParser (nullability, nt) val = do
     gType = G.TypeNamed nullability nt
 
 validateList
-  :: (MonadError (QErr a) m, MonadReader r m, Has TypeMap r)
+  :: (MonadError (QErr code) m, AsCodeHasura code, MonadReader r m, Has TypeMap r)
   => InputValueParser a m
   -> (G.Nullability, G.ListType)
   -> a
@@ -289,7 +296,7 @@ validateList inpValParser (nullability, listTy) val =
     ty = G.TypeList nullability listTy
 
 validateInputValue
-  :: (MonadError (QErr a) m, MonadReader r m, Has TypeMap r)
+  :: (MonadError (QErr code) m, AsCodeHasura code, MonadReader r m, Has TypeMap r)
   => InputValueParser a m
   -> G.GType
   -> a
@@ -302,7 +309,7 @@ validateInputValue inpValParser ty val =
       validateList inpValParser (nullability, lt) val
 
 withParsed
-  :: (Monad m, MonadError (QErr a) m)
+  :: (Monad m, MonadError (QErr code) m, AsCodeHasura code)
   => G.GType
   -> (val -> m (P specificVal))
   -> val

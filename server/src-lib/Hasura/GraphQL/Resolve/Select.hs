@@ -9,7 +9,7 @@ module Hasura.GraphQL.Resolve.Select
   , AnnSimpleSelect
   ) where
 
-import           Control.Lens                      ((^?), _2)
+import           Control.Lens                      (( # ), (^?), _2)
 import           Data.Has
 import           Data.Parser.JSONPath
 import           Hasura.Prelude
@@ -35,16 +35,16 @@ import           Hasura.RQL.Types
 import           Hasura.SQL.Types
 import           Hasura.SQL.Value
 
-jsonPathToColExp :: (MonadError (QErr a) m) => T.Text -> m S.SQLExp
+jsonPathToColExp :: (MonadError (QErr code) m, AsCodeHasura code) => T.Text -> m S.SQLExp
 jsonPathToColExp t = case parseJSONPath t of
-  Left s       -> throw400 ParseFailed $ T.pack $ "parse json path error: " ++ s
+  Left s       -> throw400 (_ParseFailed # ()) $ T.pack $ "parse json path error: " ++ s
   Right jPaths -> return $ S.SEArray $ map elToColExp jPaths
   where
     elToColExp (Key k)   = S.SELit k
     elToColExp (Index i) = S.SELit $ T.pack (show i)
 
 
-argsToColOp :: (MonadReusability m, MonadError (QErr a) m) => ArgsMap -> m (Maybe RS.ColOp)
+argsToColOp :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code) => ArgsMap -> m (Maybe RS.ColOp)
 argsToColOp args = maybe (return Nothing) toOp $ Map.lookup "path" args
   where
     toJsonPathExp = fmap (RS.ColOp S.jsonbPathOp) . jsonPathToColExp
@@ -54,7 +54,8 @@ type AnnFlds = RS.AnnFldsG UnresolvedVal
 
 resolveComputedField
   :: ( MonadReusability m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r, MonadError (QErr a) m
+     , Has OrdByCtx r, Has SQLGenCtx r, MonadError (QErr code) m
+     , AsCodeHasura code
      )
   => ComputedField -> Field -> m (RS.ComputedFieldSel UnresolvedVal)
 resolveComputedField computedField fld = fieldAsPath fld $ do
@@ -82,8 +83,8 @@ resolveComputedField computedField fld = fieldAsPath fld $ do
           RS.insertFunctionArg argName index tableRowArg argsExp
 
 processTableSelectionSet
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code, MonadReader r m
+     , Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r
      )
   => G.NamedType -> SelSet -> m AnnFlds
 processTableSelectionSet fldTy flds =
@@ -116,8 +117,8 @@ processTableSelectionSet fldTy flds =
 type TableAggFlds = RS.TableAggFldsG UnresolvedVal
 
 fromAggSelSet
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code, MonadReader r m
+     , Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r
      )
   => PGColGNameMap -> G.NamedType -> SelSet -> m TableAggFlds
 fromAggSelSet colGNameMap fldTy selSet = fmap toFields $
@@ -133,8 +134,8 @@ fromAggSelSet colGNameMap fldTy selSet = fmap toFields $
 type TableArgs = RS.TableArgsG UnresolvedVal
 
 parseTableArgs
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m
-     , Has FieldMap r, Has OrdByCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code
+     , MonadReader r m , Has FieldMap r, Has OrdByCtx r
      )
   => PGColGNameMap -> ArgsMap -> m TableArgs
 parseTableArgs colGNameMap args = do
@@ -165,8 +166,8 @@ parseTableArgs colGNameMap args = do
 type AnnSimpleSelect = RS.AnnSimpleSelG UnresolvedVal
 
 fromField
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code
+     , MonadReader r m, Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r
      )
   => RS.SelectFromG UnresolvedVal
   -> PGColGNameMap
@@ -184,7 +185,8 @@ fromField selFrom colGNameMap permFilter permLimitM fld = fieldAsPath fld $ do
     args = _fArguments fld
 
 getOrdByItemMap
-  :: ( MonadError (QErr a) m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has OrdByCtx r
      )
@@ -196,7 +198,8 @@ getOrdByItemMap nt = do
 
 parseOrderBy
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has OrdByCtx r
      )
@@ -207,7 +210,8 @@ parseOrderBy = fmap concat . withArray f
 
 getAnnObItems
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has OrdByCtx r
      )
@@ -247,7 +251,7 @@ mkOrdByItemG ordTy aobCol nullsOrd =
   OrderByItemG (Just $ OrderType ordTy) aobCol (Just $ NullsOrder nullsOrd)
 
 parseAggOrdBy
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => PGColGNameMap
   -> (RS.AnnAggOrdBy -> RS.AnnObColG UnresolvedVal)
   -> AnnGObject
@@ -273,7 +277,7 @@ parseAggOrdBy colGNameMap f annObj =
               return $ mkOrdByItemG ordTy aobCol nullsOrd
 
 parseOrderByEnum
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => G.EnumValue
   -> m (S.OrderType, S.NullsOrder)
 parseOrderByEnum = \case
@@ -286,7 +290,7 @@ parseOrderByEnum = \case
   G.EnumValue v                   -> throw500 $
     "enum value " <> showName v <> " not found in type order_by"
 
-parseLimit :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m Int
+parseLimit :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code) => AnnInpVal -> m Int
 parseLimit v = do
   pgColVal <- openOpaqueValue =<< asPGColumnValue v
   limit <- maybe noIntErr return . pgColValueToInt . pstValue $ _apvValue pgColVal
@@ -300,7 +304,8 @@ type AnnSimpleSel = RS.AnnSimpleSelG UnresolvedVal
 
 fromFieldByPKey
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has FieldMap r
      , Has OrdByCtx r
@@ -322,8 +327,8 @@ fromFieldByPKey tn colArgMap permFilter fld = fieldAsPath fld $ do
     fldTy = _fType fld
 
 convertSelect
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code
+     , MonadReader r m, Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r
      )
   => SelOpCtx -> Field -> m (RS.AnnSimpleSelG UnresolvedVal)
 convertSelect opCtx fld =
@@ -333,8 +338,8 @@ convertSelect opCtx fld =
     SelOpCtx qt _ colGNameMap permFilter permLimit = opCtx
 
 convertSelectByPKey
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code
+     , MonadReader r m, Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r
      )
   => SelPkOpCtx -> Field -> m (RS.AnnSimpleSelG UnresolvedVal)
 convertSelectByPKey opCtx fld =
@@ -344,14 +349,18 @@ convertSelectByPKey opCtx fld =
     SelPkOpCtx qt _ permFilter colArgMap = opCtx
 
 -- agg select related
-parseColumns :: (MonadReusability m, MonadError (QErr a) m) => PGColGNameMap -> AnnInpVal -> m [PGCol]
+parseColumns
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
+  => PGColGNameMap -> AnnInpVal -> m [PGCol]
 parseColumns allColFldMap val =
   flip withArray val $ \_ vals ->
     forM vals $ \v -> do
       (_, G.EnumValue enumVal) <- asEnumVal v
       pgiColumn <$> resolvePGCol allColFldMap enumVal
 
-convertCount :: (MonadReusability m, MonadError (QErr a) m) => PGColGNameMap -> ArgsMap -> m S.CountType
+convertCount
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
+  => PGColGNameMap -> ArgsMap -> m S.CountType
 convertCount colGNameMap args = do
   columnsM <- withArgM args "columns" $ parseColumns colGNameMap
   isDistinct <- or <$> withArgM args "distinct" parseDistinct
@@ -371,7 +380,7 @@ toFields :: [(T.Text, a)] -> RS.Fields a
 toFields = map (first FieldName)
 
 convertColFlds
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => PGColGNameMap -> G.NamedType -> SelSet -> m RS.ColFlds
 convertColFlds colGNameMap ty selSet = fmap toFields $
   withSelSet selSet $ \fld ->
@@ -380,7 +389,7 @@ convertColFlds colGNameMap ty selSet = fmap toFields $
       n            -> (RS.PCFCol . pgiColumn) <$> resolvePGCol colGNameMap n
 
 convertAggFld
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => PGColGNameMap -> G.NamedType -> SelSet -> m RS.AggFlds
 convertAggFld colGNameMap ty selSet = fmap toFields $
   withSelSet selSet $ \fld -> do
@@ -400,8 +409,8 @@ convertAggFld colGNameMap ty selSet = fmap toFields $
 type AnnAggSel = RS.AnnAggSelG UnresolvedVal
 
 fromAggField
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code
+     , MonadReader r m, Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r
      )
   => RS.SelectFromG UnresolvedVal
   -> PGColGNameMap
@@ -420,8 +429,8 @@ fromAggField selectFrom colGNameMap permFilter permLimit fld = fieldAsPath fld $
     args = _fArguments fld
 
 convertAggSelect
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code
+     , MonadReader r m, Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r
      )
   => SelOpCtx -> Field -> m (RS.AnnAggSelG UnresolvedVal)
 convertAggSelect opCtx fld =
@@ -431,7 +440,7 @@ convertAggSelect opCtx fld =
     SelOpCtx qt _ colGNameMap permFilter permLimit = opCtx
 
 parseFunctionArgs
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => Seq.Seq a
   -> (a -> InputFunctionArgument)
   -> Maybe AnnInpVal
@@ -462,14 +471,14 @@ parseFunctionArgs argSeq argFn = withPathK "args" . \case
         case OMap.lookup gqlName obj of
           Just argInpVal -> case maybeSqlName of
             Just sqlName -> Just . (getFuncArgNameTxt sqlName,) <$> parseArg argInpVal
-            Nothing -> throw400 NotSupported
+            Nothing -> throw400 (_NotSupported # ())
                        "Only last set of positional arguments can be omitted"
           Nothing -> if not (unHasDefault hasDefault) then
-                       throw400 NotSupported "Non default arguments cannot be omitted"
+                       throw400 (_NotSupported # ()) "Non default arguments cannot be omitted"
                      else pure Nothing
 
 makeFunctionSelectFrom
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => QualifiedFunction
   -> FunctionArgSeq
   -> Field
@@ -483,7 +492,8 @@ makeFunctionSelectFrom qf argSeq fld = withPathK "args" $ do
 
 convertFuncQuerySimple
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has FieldMap r
      , Has OrdByCtx r
@@ -499,7 +509,8 @@ convertFuncQuerySimple funcOpCtx fld =
 
 convertFuncQueryAgg
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has FieldMap r
      , Has OrdByCtx r

@@ -4,6 +4,8 @@ Description: Create/delete SQL functions to/from Hasura metadata.
 
 module Hasura.RQL.DDL.Schema.Function where
 
+import           Control.Lens                  (( # ))
+
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Utils          (showNames)
 import           Hasura.Incremental            (Cacheable)
@@ -60,9 +62,9 @@ mkFunctionArgs defArgsNo tys argNames =
     mkArg "" (ty, hasDef) = FunctionArg Nothing ty hasDef
     mkArg n  (ty, hasDef) = FunctionArg (Just n) ty hasDef
 
-validateFuncArgs :: MonadError QErr m => [FunctionArg] -> m ()
+validateFuncArgs :: (MonadError (QErr code) m, AsCodeHasura code) => [FunctionArg] -> m ()
 validateFuncArgs args =
-  unless (null invalidArgs) $ throw400 NotSupported $
+  unless (null invalidArgs) $ throw400 (_NotSupported # ()) $
     "arguments: " <> showNames invalidArgs
     <> " are not in compliance with GraphQL spec"
   where
@@ -82,14 +84,14 @@ data FunctionIntegrityError
   deriving (Show, Eq)
 
 mkFunctionInfo
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => QualifiedFunction
   -> SystemDefined
   -> FunctionConfig
   -> RawFunctionInfo
   -> m (FunctionInfo, SchemaDependency)
 mkFunctionInfo qf systemDefined config rawFuncInfo =
-  either (throw400 NotSupported . showErrors) pure
+  either (throw400 (_NotSupported # ()) . showErrors) pure
     =<< MV.runValidateT validateFunction
   where
     functionArgs = mkFunctionArgs defArgsNo inpArgTyps inpArgNames
@@ -157,7 +159,7 @@ mkFunctionInfo qf systemDefined config rawFuncInfo =
         let argsText = T.intercalate "," $ map getFuncArgNameTxt args
         in "the function arguments " <> argsText <> " are not in compliance with GraphQL spec"
 
-saveFunctionToCatalog :: QualifiedFunction -> FunctionConfig -> SystemDefined -> Q.TxE QErr ()
+saveFunctionToCatalog :: AsCodeHasura code => QualifiedFunction -> FunctionConfig -> SystemDefined -> Q.TxE (QErr code) ()
 saveFunctionToCatalog (QualifiedObject sn fn) config systemDefined =
   Q.unitQE defaultTxErrorHandler [Q.sql|
          INSERT INTO "hdb_catalog"."hdb_function"
@@ -165,7 +167,7 @@ saveFunctionToCatalog (QualifiedObject sn fn) config systemDefined =
          VALUES ($1, $2, $3, $4)
                  |] (sn, fn, Q.AltJ config, systemDefined) False
 
-delFunctionFromCatalog :: QualifiedFunction -> Q.TxE QErr ()
+delFunctionFromCatalog :: AsCodeHasura code => QualifiedFunction -> Q.TxE (QErr code) ()
 delFunctionFromCatalog (QualifiedObject sn fn) =
   Q.unitQE defaultTxErrorHandler [Q.sql|
          DELETE FROM hdb_catalog.hdb_function
@@ -193,16 +195,16 @@ emptyFunctionConfig = FunctionConfig Nothing
 -- Validate function tracking operation. Fails if function is already being
 -- tracked, or if a table with the same name is being tracked.
 trackFunctionP1
-  :: (CacheRM m, QErrM m) => QualifiedFunction -> m ()
+  :: (CacheRM m, QErrM m code, AsCodeHasura code) => QualifiedFunction -> m ()
 trackFunctionP1 qf = do
   rawSchemaCache <- askSchemaCache
   when (M.member qf $ scFunctions rawSchemaCache) $
-    throw400 AlreadyTracked $ "function already tracked : " <>> qf
+    throw400 (_AlreadyTracked # ()) $ "function already tracked : " <>> qf
   let qt = fmap (TableName . getFunctionTxt) qf
   when (M.member qt $ scTables rawSchemaCache) $
-    throw400 NotSupported $ "table with name " <> qf <<> " already exists"
+    throw400 (_NotSupported # ()) $ "table with name " <> qf <<> " already exists"
 
-trackFunctionP2 :: (MonadTx m, CacheRWM m, HasSystemDefined m)
+trackFunctionP2 :: (MonadTx code m, AsCodeHasura code, CacheRWM m, HasSystemDefined m)
                 => QualifiedFunction -> FunctionConfig -> m EncJSON
 trackFunctionP2 qf config = do
   systemDefined <- askSystemDefined
@@ -210,16 +212,16 @@ trackFunctionP2 qf config = do
   buildSchemaCacheFor $ MOFunction qf
   return successMsg
 
-handleMultipleFunctions :: (QErrM m) => QualifiedFunction -> [a] -> m a
+handleMultipleFunctions :: (QErrM m code, AsCodeHasura code) => QualifiedFunction -> [a] -> m a
 handleMultipleFunctions qf = \case
   []      ->
-    throw400 NotExists $ "no such function exists in postgres : " <>> qf
+    throw400 (_NotExists # ()) $ "no such function exists in postgres : " <>> qf
   [fi] -> return fi
   _       ->
-    throw400 NotSupported $
+    throw400 (_NotSupported # ()) $
     "function " <> qf <<> " is overloaded. Overloaded functions are not supported"
 
-fetchRawFunctioInfo :: MonadTx m => QualifiedFunction -> m RawFunctionInfo
+fetchRawFunctioInfo :: (MonadTx code m, AsCodeHasura code) => QualifiedFunction -> m RawFunctionInfo
 fetchRawFunctioInfo qf@(QualifiedObject sn fn) =
   handleMultipleFunctions qf =<< map (Q.getAltJ . runIdentity) <$> fetchFromDatabase
   where
@@ -232,7 +234,7 @@ fetchRawFunctioInfo qf@(QualifiedObject sn fn) =
           |] (sn, fn) True
 
 runTrackFunc
-  :: (MonadTx m, CacheRWM m, HasSystemDefined m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m, HasSystemDefined m)
   => TrackFunction -> m EncJSON
 runTrackFunc (TrackFunction qf)= do
   trackFunctionP1 qf
@@ -252,8 +254,11 @@ instance FromJSON TrackFunctionV2 where
     <*> o .:? "configuration" .!= emptyFunctionConfig
 
 runTrackFunctionV2
-  :: ( QErrM m, CacheRWM m, HasSystemDefined m
-     , MonadTx m
+  :: ( QErrM m code
+     , CacheRWM m
+     , HasSystemDefined m
+     , MonadTx code m
+     , AsCodeHasura code
      )
   => TrackFunctionV2 -> m EncJSON
 runTrackFunctionV2 (TrackFunctionV2 qf config) = do
@@ -266,7 +271,7 @@ newtype UnTrackFunction
   deriving (Show, Eq, FromJSON, ToJSON, Lift)
 
 runUntrackFunc
-  :: (QErrM m, CacheRWM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, CacheRWM m, MonadTx code m)
   => UnTrackFunction -> m EncJSON
 runUntrackFunc (UnTrackFunction qf) = do
   void $ askFunctionInfo qf

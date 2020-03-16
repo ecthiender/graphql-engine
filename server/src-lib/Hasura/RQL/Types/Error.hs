@@ -170,7 +170,7 @@ data QErr code
   = QErr
   { qePath     :: !JSONPath
   , qeStatus   :: !N.Status
-  , qeError    :: !T.Text
+  , qeError    :: !Text
   , qeCode     :: !code
   , qeInternal :: !(Maybe Value)
   }
@@ -241,74 +241,74 @@ instance AsCodeHasura code => Q.FromPGTxErr (QErr code) where
     let e = err500 (review _PostgresError ()) "postgres tx error"
     in e {qeInternal = Just $ toJSON txe}
 
-err400 :: code -> T.Text -> QErr code
+err400 :: code -> Text -> QErr code
 err400 c t = QErr [] N.status400 t c Nothing
 
-err404 ::  code -> T.Text -> QErr code
+err404 ::  code -> Text -> QErr code
 err404 c t = QErr [] N.status404 t c Nothing
 
-err401 :: a -> T.Text -> QErr a
+err401 :: a -> Text -> QErr a
 err401 c t = QErr [] N.status401 t c Nothing
 
-err500 :: a -> T.Text -> QErr a
+err500 :: a -> Text -> QErr a
 err500 c t = QErr [] N.status500 t c Nothing
 
-type QErrM m a = (MonadError (QErr a) m)
+type QErrM m code = MonadError (QErr code) m
 
-throw400 :: (QErrM m c) => c -> T.Text -> m a
+throw400 :: (QErrM m code) => code -> Text -> m a
 throw400 c t = throwError $ err400 c t
 
-throw404 :: (QErrM m c, AsCodeHasura c) => T.Text -> m a
-throw404 t = throwError $ err404 (review _NotFound ()) t
+throw404 :: (QErrM m code, AsCodeHasura code) => Text -> m a
+throw404 t = throwError $ err404 (_NotFound # ()) t
 
-throw401 :: (QErrM m c, AsCodeHasura c) => T.Text -> m a
-throw401 t = throwError $ err401 (review _AccessDenied ()) t
+throw401 :: (QErrM m code, AsCodeHasura code) => Text -> m a
+throw401 t = throwError $ err401 (_AccessDenied # ()) t
 
-throw500 :: (QErrM m a, AsCodeHasura a) => T.Text -> m a
+throw500 :: (QErrM m code, AsCodeHasura code) => Text -> m a
 throw500 t = throwError $ internalError t
 
-internalError :: AsCodeHasura a => Text -> QErr a
-internalError = err500 $ review _Unexpected ()
+internalError :: AsCodeHasura code => Text -> QErr code
+internalError = err500 $ _Unexpected # ()
 
-throw500WithDetail :: (QErrM m a, AsCodeHasura a) => T.Text -> Value -> m a
+throw500WithDetail :: (QErrM m code, AsCodeHasura code) => Text -> Value -> m a
 throw500WithDetail t detail =
-  throwError $ (err500 (review _Unexpected ()) t) {qeInternal = Just detail}
+  throwError $ (err500 (_Unexpected # ()) t) {qeInternal = Just detail}
 
-modifyQErr :: (QErrM m a) => (QErr a -> QErr a) -> m a -> m a
+modifyQErr :: (QErrM m code) => (QErr code -> QErr code) -> m a -> m a
 modifyQErr f a = catchError a (throwError . f)
 
-modifyErr :: (QErrM m a)
-          => (T.Text -> T.Text)
+modifyErr :: (QErrM m code)
+          => (Text -> Text)
           -> m a -> m a
 modifyErr f = modifyQErr (liftTxtMod f)
 
-modifyErrA :: (ArrowError (QErr a) arr) => arr (e, s) a -> arr (e, (Text -> Text, s)) a
+modifyErrA :: (ArrowError (QErr code) arr) => arr (e, s) a -> arr (e, (Text -> Text, s)) a
 modifyErrA f = proc (e, (g, s)) -> (| mapErrorA (f -< (e, s)) |) (liftTxtMod g)
 
-liftTxtMod :: (T.Text -> T.Text) -> QErr a -> QErr a
+liftTxtMod :: (Text -> Text) -> QErr code -> QErr code
 liftTxtMod f (QErr path st s c i) = QErr path st (f s) c i
 
-modifyErrAndSet500 :: (QErrM m a) => (T.Text -> T.Text) -> m a -> m a
+modifyErrAndSet500 :: (QErrM m code) => (Text -> Text) -> m a -> m a
 modifyErrAndSet500 f = modifyQErr (liftTxtMod500 f)
 
-liftTxtMod500 :: (T.Text -> T.Text) -> QErr a -> QErr a
+liftTxtMod500 :: (Text -> Text) -> QErr code -> QErr code
 liftTxtMod500 f (QErr path _ s c i) = QErr path N.status500 (f s) c i
 
-withPathE :: (ArrowError (QErr c) arr) => arr (e, s) a -> arr (e, (JSONPathElement, s)) a
+withPathE :: (ArrowError (QErr code) arr) => arr (e, s) a -> arr (e, (JSONPathElement, s)) a
 withPathE f = proc (e, (pe, s)) -> (| mapErrorA ((e, s) >- f) |) (injectPrefix pe)
   where
     injectPrefix pe (QErr path st msg code i) = QErr (pe:path) st msg code i
 
-withPathKA :: (ArrowError (QErr c) arr) => arr (e, s) a -> arr (e, (Text, s)) a
+withPathKA :: (ArrowError (QErr code) arr) => arr (e, s) a -> arr (e, (Text, s)) a
 withPathKA f = second (first $ arr Key) >>> withPathE f
 
-withPathK :: (QErrM m c) => Text -> m a -> m a
+withPathK :: (QErrM m code) => Text -> m a -> m a
 withPathK a = runKleisli proc m -> (| withPathKA (m >- bindA) |) a
 
-withPathIA :: (ArrowError (QErr c) arr) => arr (e, s) a -> arr (e, (Int, s)) a
+withPathIA :: (ArrowError (QErr code) arr) => arr (e, s) a -> arr (e, (Int, s)) a
 withPathIA f = second (first $ arr Index) >>> withPathE f
 
-withPathI :: (QErrM m c) => Int -> m a -> m a
+withPathI :: (QErrM m code) => Int -> m a -> m a
 withPathI a = runKleisli proc m -> (| withPathIA (m >- bindA) |) a
 
 indexedFoldlA'
@@ -318,7 +318,7 @@ indexedFoldlA' f = proc (e, (acc0, (xs, s))) ->
   (| foldlA' (\acc (i, v) -> (| withPathIA ((e, (acc, (v, s))) >- f) |) i)
   |) acc0 (zip [0..] (toList xs))
 
-indexedFoldM :: (QErrM m c, Foldable t) => (b -> a -> m b) -> b -> t a -> m b
+indexedFoldM :: (QErrM m code, Foldable t) => (b -> a -> m b) -> b -> t a -> m b
 indexedFoldM f acc0 = runKleisli proc xs ->
   (| indexedFoldlA' (\acc v -> f acc v >- bindA) |) acc0 xs
 
@@ -328,26 +328,26 @@ indexedTraverseA_
 indexedTraverseA_ f = proc (e, (xs, s)) ->
   (| indexedFoldlA' (\() x -> do { (e, (x, s)) >- f; () >- returnA }) |) () xs
 
-indexedMapM_ :: (QErrM m c, Foldable t) => (a -> m b) -> t a -> m ()
+indexedMapM_ :: (QErrM m code, Foldable t) => (a -> m b) -> t a -> m ()
 indexedMapM_ f = runKleisli proc xs -> (| indexedTraverseA_ (\x -> f x >- bindA) |) xs
 
-indexedForM_ :: (QErrM m c, Foldable t) => t a -> (a -> m b) -> m ()
+indexedForM_ :: (QErrM m code, Foldable t) => t a -> (a -> m b) -> m ()
 indexedForM_ = flip indexedMapM_
 
 indexedTraverseA
-  :: (ArrowChoice arr, ArrowError (QErr c) arr)
+  :: (ArrowChoice arr, ArrowError (QErr code) arr)
   => arr (e, (a, s)) b -> arr (e, ([a], s)) [b]
 indexedTraverseA f = proc (e, (xs, s)) ->
   (| traverseA (\(i, x) -> (| withPathIA ((e, (x, s)) >- f) |) i)
   |) (zip [0..] (toList xs))
 
-indexedMapM :: (QErrM m c) => (a -> m b) -> [a] -> m [b]
+indexedMapM :: (QErrM m code) => (a -> m b) -> [a] -> m [b]
 indexedMapM f = traverse (\(i, x) -> withPathI i (f x)) . zip [0..]
 
-indexedForM :: (QErrM m c) => [a] -> (a -> m b) -> m [b]
+indexedForM :: (QErrM m code) => [a] -> (a -> m b) -> m [b]
 indexedForM = flip indexedMapM
 
-liftIResult :: (QErrM m c, AsCodeHasura c) => IResult a -> m a
+liftIResult :: (QErrM m code, AsCodeHasura code) => IResult a -> m a
 liftIResult (IError path msg) =
   throwError $ QErr path N.status400 (T.pack $ formatMsg msg) (review _ParseFailed ()) Nothing
 liftIResult (ISuccess a) =
@@ -362,9 +362,9 @@ formatMsg str = case T.splitOn "the key " txt of
   where
     txt = T.pack str
 
-runAesonParser :: (QErrM m c, AsCodeHasura c) => (Value -> Parser a) -> Value -> m a
+runAesonParser :: (QErrM m code, AsCodeHasura code) => (Value -> Parser a) -> Value -> m a
 runAesonParser p =
   liftIResult . iparse p
 
-decodeValue :: (FromJSON a, QErrM m c, AsCodeHasura c) => Value -> m a
+decodeValue :: (FromJSON a, QErrM m code, AsCodeHasura code) => Value -> m a
 decodeValue = liftIResult . ifromJSON

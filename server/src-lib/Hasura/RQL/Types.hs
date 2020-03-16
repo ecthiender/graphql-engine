@@ -38,6 +38,7 @@ module Hasura.RQL.Types
   , module R
   ) where
 
+import           Control.Lens
 import           Hasura.EncJSON
 import           Hasura.Prelude
 import           Hasura.SQL.Types
@@ -91,11 +92,11 @@ instance (UserInfoM m) => UserInfoM (StateT s m) where
   askUserInfo = lift askUserInfo
 
 askTabInfo
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> m TableInfo
 askTabInfo tabName = do
   rawSchemaCache <- askSchemaCache
-  liftMaybe (err400 NotExists errMsg) $ M.lookup tabName $ scTables rawSchemaCache
+  liftMaybe (err400 (_NotExists # ()) errMsg) $ M.lookup tabName $ scTables rawSchemaCache
   where
     errMsg = "table " <> tabName <<> " does not exist"
 
@@ -104,22 +105,22 @@ isTableTracked sc qt =
   isJust $ M.lookup qt $ scTables sc
 
 askTabInfoFromTrigger
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => TriggerName -> m TableInfo
 askTabInfoFromTrigger trn = do
   sc <- askSchemaCache
   let tabInfos = M.elems $ scTables sc
-  liftMaybe (err400 NotExists errMsg) $ find (isJust.M.lookup trn._tiEventTriggerInfoMap) tabInfos
+  liftMaybe (err400 (_NotExists # ()) errMsg) $ find (isJust.M.lookup trn._tiEventTriggerInfoMap) tabInfos
   where
     errMsg = "event trigger " <> triggerNameToTxt trn <<> " does not exist"
 
 askEventTriggerInfo
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => TriggerName -> m EventTriggerInfo
 askEventTriggerInfo trn = do
   ti <- askTabInfoFromTrigger trn
   let etim = _tiEventTriggerInfoMap ti
-  liftMaybe (err400 NotExists errMsg) $ M.lookup trn etim
+  liftMaybe (err400 (_NotExists # ()) errMsg) $ M.lookup trn etim
   where
     errMsg = "event trigger " <> triggerNameToTxt trn <<> " does not exist"
 
@@ -172,7 +173,7 @@ instance (Monoid w, HasSystemDefined m) => HasSystemDefined (WriterT w m) where
 
 newtype HasSystemDefinedT m a
   = HasSystemDefinedT { unHasSystemDefinedT :: ReaderT SystemDefined m a }
-  deriving ( Functor, Applicative, Monad, MonadTrans, MonadIO, MonadError e, MonadTx
+  deriving ( Functor, Applicative, Monad, MonadTrans, MonadIO, MonadError e, MonadTx code
            , HasHttpManager, HasSQLGenCtx, TableCoreInfoRM, CacheRM, CacheRWM, UserInfoM )
 
 runHasSystemDefinedT :: SystemDefined -> HasSystemDefinedT m a -> m a
@@ -181,25 +182,25 @@ runHasSystemDefinedT systemDefined = flip runReaderT systemDefined . unHasSystem
 instance (Monad m) => HasSystemDefined (HasSystemDefinedT m) where
   askSystemDefined = HasSystemDefinedT ask
 
-liftMaybe :: (QErrM m) => QErr -> Maybe a -> m a
+liftMaybe :: (QErrM m code) => QErr code -> Maybe a -> m a
 liftMaybe e = maybe (throwError e) return
 
-throwTableDoesNotExist :: (QErrM m) => QualifiedTable -> m a
-throwTableDoesNotExist tableName = throw400 NotExists ("table " <> tableName <<> " does not exist")
+throwTableDoesNotExist :: (QErrM m code, AsCodeHasura code) => QualifiedTable -> m a
+throwTableDoesNotExist tableName = throw400 (_NotExists # ()) ("table " <> tableName <<> " does not exist")
 
-getTableInfo :: (QErrM m) => QualifiedTable -> HashMap QualifiedTable a -> m a
+getTableInfo :: (QErrM m code, AsCodeHasura code) => QualifiedTable -> HashMap QualifiedTable a -> m a
 getTableInfo tableName infoMap =
   M.lookup tableName infoMap `onNothing` throwTableDoesNotExist tableName
 
-askTableCoreInfo :: (QErrM m, TableCoreInfoRM m) => QualifiedTable -> m TableCoreInfo
+askTableCoreInfo :: (AsCodeHasura code, QErrM m code, TableCoreInfoRM m) => QualifiedTable -> m TableCoreInfo
 askTableCoreInfo tableName =
   lookupTableCoreInfo tableName >>= (`onNothing` throwTableDoesNotExist tableName)
 
-askFieldInfoMap :: (QErrM m, TableCoreInfoRM m) => QualifiedTable -> m (FieldInfoMap FieldInfo)
+askFieldInfoMap :: (AsCodeHasura code, QErrM m code, TableCoreInfoRM m) => QualifiedTable -> m (FieldInfoMap FieldInfo)
 askFieldInfoMap = fmap _tciFieldInfoMap . askTableCoreInfo
 
 askPGType
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => FieldInfoMap FieldInfo
   -> PGCol
   -> T.Text
@@ -208,7 +209,7 @@ askPGType m c msg =
   pgiType <$> askPGColInfo m c msg
 
 askPGColInfo
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => FieldInfoMap FieldInfo
   -> PGCol
   -> T.Text
@@ -222,14 +223,14 @@ askPGColInfo m c msg = do
     (FIComputedField _)  -> throwErr "computed field"
   where
     throwErr fieldType =
-      throwError $ err400 UnexpectedPayload $ mconcat
+      throwError $ err400 (_UnexpectedPayload # ()) $ mconcat
       [ "expecting a postgres column; but, "
       , c <<> " is a " <> fieldType <> "; "
       , msg
       ]
 
 askComputedFieldInfo
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => FieldInfoMap FieldInfo
   -> ComputedFieldName
   -> m ComputedFieldInfo
@@ -242,12 +243,12 @@ askComputedFieldInfo fields computedField = do
     (FIComputedField cci)  -> pure cci
   where
     throwErr fieldType =
-      throwError $ err400 UnexpectedPayload $ mconcat
+      throwError $ err400 (_UnexpectedPayload # ()) $ mconcat
       [ "expecting a computed field; but, "
       , computedField <<> " is a " <> fieldType <> "; "
       ]
 
-assertPGCol :: (MonadError QErr m)
+assertPGCol :: (MonadError (QErr code) m, AsCodeHasura code)
             => FieldInfoMap FieldInfo
             -> T.Text
             -> PGCol
@@ -256,7 +257,7 @@ assertPGCol m msg c = do
   _ <- askPGColInfo m c msg
   return ()
 
-askRelType :: (MonadError QErr m)
+askRelType :: (MonadError (QErr code) m, AsCodeHasura code)
            => FieldInfoMap FieldInfo
            -> RelName
            -> T.Text
@@ -267,13 +268,13 @@ askRelType m r msg = do
   case colInfo of
     (FIRelationship relInfo) -> return relInfo
     _                        ->
-      throwError $ err400 UnexpectedPayload $ mconcat
+      throwError $ err400 (_UnexpectedPayload # ()) $ mconcat
       [ "expecting a relationship; but, "
       , r <<> " is a postgres column; "
       , msg
       ]
 
-askFieldInfo :: (MonadError QErr m)
+askFieldInfo :: (MonadError (QErr code) m, AsCodeHasura code)
              => FieldInfoMap fieldInfo
              -> FieldName
              -> m fieldInfo
@@ -281,7 +282,7 @@ askFieldInfo m f =
   case M.lookup f m of
   Just colInfo -> return colInfo
   Nothing ->
-    throw400 NotExists $ mconcat
+    throw400 (_NotExists # ()) $ mconcat
     [ f <<> " does not exist"
     ]
 

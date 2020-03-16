@@ -8,6 +8,7 @@ module Hasura.RQL.DML.Update
   , runUpdate
   ) where
 
+import           Control.Lens             (( # ))
 import           Data.Aeson.Types
 import           Instances.TH.Lift        ()
 
@@ -76,7 +77,7 @@ mkUpdateCTE (AnnUpd tn setExps (permFltr, wc) chk _ _) =
     checkExpr = toSQLBoolExp (S.QualTable tn) chk
 
 convInc
-  :: (QErrM m)
+  :: (QErrM m code)
   => (PGColumnType -> Value -> m S.SQLExp)
   -> PGCol
   -> PGColumnType
@@ -87,7 +88,7 @@ convInc f col colType val = do
   return (col, S.SEOpApp S.incOp [S.mkSIdenExp col, prepExp])
 
 convMul
-  :: (QErrM m)
+  :: (QErrM m code)
   => (PGColumnType -> Value -> m S.SQLExp)
   -> PGCol
   -> PGColumnType
@@ -98,7 +99,7 @@ convMul f col colType val = do
   return (col, S.SEOpApp S.mulOp [S.mkSIdenExp col, prepExp])
 
 convSet
-  :: (QErrM m)
+  :: (QErrM m code)
   => (PGColumnType -> Value -> m S.SQLExp)
   -> PGCol
   -> PGColumnType
@@ -112,7 +113,7 @@ convDefault :: (Monad m) => PGCol -> PGColumnType -> () -> m (PGCol, S.SQLExp)
 convDefault col _ _ = return (col, S.SEUnsafe "DEFAULT")
 
 convOp
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => FieldInfoMap FieldInfo
   -> [PGCol]
   -> UpdPermInfo
@@ -133,11 +134,11 @@ convOp fieldInfoMap preSetCols updPerm objs conv =
     relWhenPgErr = "relationships can't be updated"
     throwNotUpdErr c = do
       role <- userRole <$> askUserInfo
-      throw400 NotSupported $ "column " <> c <<> " is not updatable"
+      throw400 (_NotSupported # ()) $ "column " <> c <<> " is not updatable"
         <> " for role " <> role <<> "; its value is predefined in permission"
 
 validateUpdateQueryWith
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => SessVarBldr m
   -> (PGColumnType -> Value -> m S.SQLExp)
   -> UpdateQuery
@@ -190,7 +191,7 @@ validateUpdateQueryWith sessVarBldr prepValBldr uq = do
                     mulItems ++ defItems
 
   when (null setExpItems) $
-    throw400 UnexpectedPayload "atleast one of $set, $inc, $mul has to be present"
+    throw400 (_UnexpectedPayload # ()) "atleast one of $set, $inc, $mul has to be present"
 
   -- convert the where clause
   annSQLBoolExp <- withPathK "where" $
@@ -217,13 +218,13 @@ validateUpdateQueryWith sessVarBldr prepValBldr uq = do
       <> "without \"select\" permission on the table"
 
 validateUpdateQuery
-  :: (QErrM m, UserInfoM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m)
   => UpdateQuery -> m (AnnUpd, DS.Seq Q.PrepArg)
 validateUpdateQuery =
   runDMLP1T . validateUpdateQueryWith sessVarFromCurrentSetting binRHSBuilder
 
 updateQueryToTx
-  :: Bool -> (AnnUpd, DS.Seq Q.PrepArg) -> Q.TxE QErr EncJSON
+  :: AsCodeHasura code => Bool -> (AnnUpd, DS.Seq Q.PrepArg) -> Q.TxE (QErr code) EncJSON
 updateQueryToTx strfyNum (u, p) =
   runMutation $ Mutation (uqp1Table u) (updateCTE, p)
                 (uqp1Output u) (uqp1AllCols u) strfyNum
@@ -231,7 +232,7 @@ updateQueryToTx strfyNum (u, p) =
     updateCTE = mkUpdateCTE u
 
 runUpdate
-  :: (QErrM m, UserInfoM m, CacheRM m, MonadTx m, HasSQLGenCtx m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m, MonadTx code m, HasSQLGenCtx m)
   => UpdateQuery -> m EncJSON
 runUpdate q = do
   strfyNum <- stringifyNum <$> askSQLGenCtx

@@ -23,6 +23,7 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Utils                (makeReasonMessage)
 import           Hasura.SQL.Types
 
+import Control.Lens ((#))
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
@@ -54,7 +55,7 @@ instance NFData AddComputedField
 instance Cacheable AddComputedField
 $(deriveJSON (aesonDrop 4 snakeCase) ''AddComputedField)
 
-runAddComputedField :: (MonadTx m, CacheRWM m) => AddComputedField -> m EncJSON
+runAddComputedField :: (MonadTx code m, AsCodeHasura code, CacheRWM m) => AddComputedField -> m EncJSON
 runAddComputedField q = do
   withPathK "table" $ askTabInfo (_afcTable q)
   addComputedFieldToCatalog q
@@ -103,7 +104,7 @@ showError qf = \case
       FTANamed argName _ -> argName <<> " argument of the function " <>> qf
 
 addComputedFieldP2Setup
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => S.HashSet QualifiedTable
   -- ^ the set of all tracked tables
   -> QualifiedTable
@@ -113,7 +114,7 @@ addComputedFieldP2Setup
   -> Maybe Text
   -> m ComputedFieldInfo
 addComputedFieldP2Setup trackedTables table computedField definition rawFunctionInfo comment =
-  either (throw400 NotSupported . showErrors) pure =<< MV.runValidateT (mkComputedFieldInfo)
+  either (throw400 (_NotSupported # ()) . showErrors) pure =<< MV.runValidateT (mkComputedFieldInfo)
   where
     inputArgNames = rfiInputArgNames rawFunctionInfo
     ComputedFieldDefinition function maybeTableArg = definition
@@ -200,7 +201,7 @@ addComputedFieldP2Setup trackedTables table computedField definition rawFunction
           filter ((/=) (Just argName) . faName) inputArgs
 
 addComputedFieldToCatalog
-  :: MonadTx m
+  :: (MonadTx code m, AsCodeHasura code)
   => AddComputedField -> m ()
 addComputedFieldToCatalog q =
   liftTx $ Q.withQE defaultTxErrorHandler
@@ -229,7 +230,7 @@ instance FromJSON DropComputedField where
       <*> o .:? "cascade" .!= False
 
 runDropComputedField
-  :: (MonadTx m, CacheRWM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m)
   => DropComputedField -> m EncJSON
 runDropComputedField (DropComputedField table computedField cascade) = do
   -- Validation
@@ -254,7 +255,7 @@ runDropComputedField (DropComputedField table computedField cascade) = do
            <> computedField <<> "; " <> reportSchemaObj d
 
 dropComputedFieldFromCatalog
-  :: MonadTx m
+  :: (MonadTx code m, AsCodeHasura code)
   => QualifiedTable -> ComputedFieldName -> m ()
 dropComputedFieldFromCatalog (QualifiedObject schema table) computedField =
   liftTx $ Q.withQE defaultTxErrorHandler

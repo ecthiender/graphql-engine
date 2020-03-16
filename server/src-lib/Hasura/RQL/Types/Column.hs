@@ -104,7 +104,7 @@ unsafePGColumnToRepresentation = \case
 
 -- | Note: Unconditionally accepts null values and returns 'PGNull'.
 parsePGScalarValue
-  :: forall c m. (MonadError (QErr c) m, AsCodeHasura c) => PGColumnType -> Value -> m (WithScalarType PGScalarValue)
+  :: forall code m. (MonadError (QErr code) m, AsCodeHasura code) => PGColumnType -> Value -> m (WithScalarType PGScalarValue)
 parsePGScalarValue columnType value = case columnType of
   PGColumnScalar scalarType ->
     WithScalarType scalarType <$> runAesonParser (parsePGValue scalarType) value
@@ -120,14 +120,14 @@ parsePGScalarValue columnType value = case columnType of
         pure $ PGValText textValue
 
 parsePGScalarValues
-  :: (MonadError (QErr c) m, AsCodeHasura c)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => PGColumnType -> [Value] -> m (WithScalarType [PGScalarValue])
 parsePGScalarValues columnType values = do
   scalarValues <- indexedMapM (fmap pstValue . parsePGScalarValue columnType) values
   pure $ WithScalarType (unsafePGColumnToRepresentation columnType) scalarValues
 
 parseTxtEncodedPGValue
-  :: (MonadError (QErr c) m, AsCodeHasura c)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => PGColumnType -> TxtEncodedPGVal -> m (WithScalarType PGScalarValue)
 parseTxtEncodedPGValue colTy val =
   parsePGScalarValue colTy $ case val of

@@ -71,7 +71,7 @@ buildCustomTypesSchema nonObjectTypeMap annotatedObjectTypes roleName =
       Map.elems annotatedObjectTypes
 
 annotateObjectType
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => TableCache -> NonObjectTypeMap -> ObjectTypeDefinition -> m AnnotatedObjectType
 annotateObjectType tableCache nonObjectTypeMap objectDefinition = do
   annotatedFields <-
@@ -116,7 +116,7 @@ annotateObjectType tableCache nonObjectTypeMap objectDefinition = do
              VT.showNamedTy typeName
 
 buildCustomTypesSchemaPartial
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => TableCache -> CustomTypes -> m (NonObjectTypeMap, AnnotatedObjects)
 buildCustomTypesSchemaPartial tableCache customTypes = do
   let typeInfos =

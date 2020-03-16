@@ -96,7 +96,7 @@ data HandlerCtx
   , hcRequestId       :: !RequestId
   }
 
-type Handler m = ExceptT QErr (ReaderT HandlerCtx m)
+type Handler m = ExceptT (QErr code) (ReaderT HandlerCtx m)
 
 data APIResp
   = JSONResp !(HttpResponse EncJSON)
@@ -167,7 +167,7 @@ isDeveloperAPIEnabled :: ServerCtx -> Bool
 isDeveloperAPIEnabled sc = S.member DEVELOPER $ scEnabledAPIs sc
 
 -- {-# SCC parseBody #-}
-parseBody :: (FromJSON a, MonadError QErr m) => BL.ByteString -> m a
+parseBody :: (FromJSON a, MonadError (QErr code) m) => BL.ByteString -> m a
 parseBody reqBody =
   case eitherDecode' reqBody of
     Left e     -> throw400 InvalidJSON (T.pack e)
@@ -198,7 +198,7 @@ class Monad m => ConfigApiHandler m where
 mkSpockAction
   :: (HasVersion, MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m)
   => ServerCtx
-  -> (Bool -> QErr -> Value)
+  -> (Bool -> (QErr code) -> Value)
   -- ^ `QErr` JSON encoder function
   -> (QErr -> QErr)
   -- ^ `QErr` modifier
@@ -436,7 +436,7 @@ configApiGetHandler serverCtx =
       let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
       return $ JSONResp $ HttpResponse res Nothing
 
-initErrExit :: QErr -> IO a
+initErrExit :: (QErr code) -> IO a
 initErrExit e = do
   putStrLn $
     "failed to build schema-cache because of inconsistent metadata: "
@@ -656,7 +656,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
 
     spockAction
       :: (FromJSON a, ToJSON a, MonadIO m, UserAuthentication m, HttpLog m)
-      => (Bool -> QErr -> Value) -> (QErr -> QErr) -> APIHandler m a -> Spock.ActionT m ()
+      => (Bool -> (QErr code) -> Value) -> (QErr -> QErr) -> APIHandler m a -> Spock.ActionT m ()
     spockAction = mkSpockAction serverCtx
 
 
@@ -676,7 +676,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
       e <- liftIO $ runExceptT $ runLazyTx' (scPGExecCtx serverCtx) select1Query
       pure $ isRight e
       where
-        select1Query :: (MonadTx m) => m Int
+        select1Query :: (MonadTx code m) => m Int
         select1Query =   liftTx $ runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler
                          [Q.sql| SELECT 1 |] () False
 

@@ -85,12 +85,12 @@ instance ToJSON RunSQL where
           Q.ReadWrite -> False
       ]
 
-runRunSQL :: (MonadTx m, CacheRWM m, HasSQLGenCtx m) => RunSQL -> m EncJSON
+runRunSQL :: (MonadTx code m, CacheRWM m, HasSQLGenCtx m) => RunSQL -> m EncJSON
 runRunSQL RunSQL {..} = do
   metadataCheckNeeded <- onNothing rCheckMetadataConsistency $ isAltrDropReplace rSql
   bool (execRawSQL rSql) (withMetadataCheck rCascade $ execRawSQL rSql) metadataCheckNeeded
   where
-    execRawSQL :: (MonadTx m) => Text -> m EncJSON
+    execRawSQL :: (MonadTx code m) => Text -> m EncJSON
     execRawSQL =
       fmap (encJFromJValue @RunSQLRes) . liftTx . Q.multiQE rawSqlErrHandler . Q.fromText
       where
@@ -98,7 +98,7 @@ runRunSQL RunSQL {..} = do
           let e = err400 PostgresError "query execution failed"
            in e {qeInternal = Just $ toJSON txe}
 
-    isAltrDropReplace :: QErrM m => T.Text -> m Bool
+    isAltrDropReplace :: QErrM m code => T.Text -> m Bool
     isAltrDropReplace = either throwErr return . matchRegex regex False
       where
         throwErr s = throw500 $ "compiling regex failed: " <> T.pack s

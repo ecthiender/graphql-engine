@@ -90,17 +90,17 @@ $(deriveJSON (aesonDrop 2 snakeCase){omitNothingFields=True} ''UntrackTable)
 -- | Track table/view, Phase 1:
 -- Validate table tracking operation. Fails if table is already being tracked,
 -- or if a function with the same name is being tracked.
-trackExistingTableOrViewP1 :: (QErrM m, CacheRWM m) => QualifiedTable -> m ()
+trackExistingTableOrViewP1 :: (QErrM m code, AsCodeHasura code, CacheRWM m) => QualifiedTable -> m ()
 trackExistingTableOrViewP1 qt = do
   rawSchemaCache <- askSchemaCache
   when (M.member qt $ scTables rawSchemaCache) $
-    throw400 AlreadyTracked $ "view/table already tracked : " <>> qt
+    throw400 (_AlreadyTracked # ()) $ "view/table already tracked : " <>> qt
   let qf = fmap (FunctionName . getTableTxt) qt
   when (M.member qf $ scFunctions rawSchemaCache) $
-    throw400 NotSupported $ "function with name " <> qt <<> " already exists"
+    throw400 (_NotSupported # ()) $ "function with name " <> qt <<> " already exists"
 
 trackExistingTableOrViewP2
-  :: (MonadTx m, CacheRWM m, HasSystemDefined m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m, HasSystemDefined m)
   => QualifiedTable -> Bool -> TableConfig -> m EncJSON
 trackExistingTableOrViewP2 tableName isEnum config = do
   sc <- askSchemaCache
@@ -111,7 +111,7 @@ trackExistingTableOrViewP2 tableName isEnum config = do
   return successMsg
 
 runTrackTableQ
-  :: (MonadTx m, CacheRWM m, HasSystemDefined m) => TrackTable -> m EncJSON
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m, HasSystemDefined m) => TrackTable -> m EncJSON
 runTrackTableQ (TrackTable qt isEnum) = do
   trackExistingTableOrViewP1 qt
   trackExistingTableOrViewP2 qt isEnum emptyTableConfig
@@ -124,12 +124,12 @@ data TrackTableV2
 $(deriveJSON (aesonDrop 4 snakeCase) ''TrackTableV2)
 
 runTrackTableV2Q
-  :: (MonadTx m, CacheRWM m, HasSystemDefined m) => TrackTableV2 -> m EncJSON
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m, HasSystemDefined m) => TrackTableV2 -> m EncJSON
 runTrackTableV2Q (TrackTableV2 (TrackTable qt isEnum) config) = do
   trackExistingTableOrViewP1 qt
   trackExistingTableOrViewP2 qt isEnum config
 
-runSetExistingTableIsEnumQ :: (MonadTx m, CacheRWM m) => SetTableIsEnum -> m EncJSON
+runSetExistingTableIsEnumQ :: (MonadTx code m, AsCodeHasura code, CacheRWM m) => SetTableIsEnum -> m EncJSON
 runSetExistingTableIsEnumQ (SetTableIsEnum tableName isEnum) = do
   void $ askTabInfo tableName -- assert that table is tracked
   updateTableIsEnumInCatalog tableName isEnum
@@ -152,7 +152,7 @@ instance FromJSON SetTableCustomFields where
     <*> o .:? "custom_column_names" .!= M.empty
 
 runSetTableCustomFieldsQV2
-  :: (MonadTx m, CacheRWM m) => SetTableCustomFields -> m EncJSON
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m) => SetTableCustomFields -> m EncJSON
 runSetTableCustomFieldsQV2 (SetTableCustomFields tableName rootFields columnNames) = do
   void $ askTabInfo tableName -- assert that table is tracked
   updateTableConfig tableName (TableConfig rootFields columnNames)
@@ -160,19 +160,19 @@ runSetTableCustomFieldsQV2 (SetTableCustomFields tableName rootFields columnName
   return successMsg
 
 unTrackExistingTableOrViewP1
-  :: (CacheRM m, QErrM m) => UntrackTable -> m ()
+  :: (CacheRM m, QErrM m code, AsCodeHasura code) => UntrackTable -> m ()
 unTrackExistingTableOrViewP1 (UntrackTable vn _) = do
   rawSchemaCache <- askSchemaCache
   case M.lookup vn (scTables rawSchemaCache) of
     Just ti ->
       -- Check if table/view is system defined
-      when (isSystemDefined $ _tciSystemDefined $ _tiCoreInfo ti) $ throw400 NotSupported $
+      when (isSystemDefined $ _tciSystemDefined $ _tiCoreInfo ti) $ throw400 (_NotSupported # ()) $
         vn <<> " is system defined, cannot untrack"
-    Nothing -> throw400 AlreadyUntracked $
+    Nothing -> throw400 (_AlreadyUntracked # ()) $
       "view/table already untracked : " <>> vn
 
 unTrackExistingTableOrViewP2
-  :: (CacheRWM m, MonadTx m)
+  :: (CacheRWM m, MonadTx code m, AsCodeHasura code)
   => UntrackTable -> m EncJSON
 unTrackExistingTableOrViewP2 (UntrackTable qtn cascade) = withNewInconsistentObjsCheck do
   sc <- askSchemaCache
@@ -195,13 +195,13 @@ unTrackExistingTableOrViewP2 (UntrackTable qtn cascade) = withNewInconsistentObj
       _                  -> False
 
 runUntrackTableQ
-  :: (CacheRWM m, MonadTx m)
+  :: (CacheRWM m, MonadTx code m, AsCodeHasura code)
   => UntrackTable -> m EncJSON
 runUntrackTableQ q = do
   unTrackExistingTableOrViewP1 q
   unTrackExistingTableOrViewP2 q
 
-processTableChanges :: (MonadTx m, CacheRM m) => TableCoreInfo -> TableDiff -> m ()
+processTableChanges :: (QErrM m code, MonadTx code m, AsCodeHasura code, CacheRM m) => TableCoreInfo -> TableDiff -> m ()
 processTableChanges ti tableDiff = do
   -- If table rename occurs then don't replace constraints and
   -- process dropped/added columns, because schema reload happens eventually
@@ -242,7 +242,7 @@ processTableChanges ti tableDiff = do
               let colId = SOTableObj tn $ TOCol oldName
                   typeDepObjs = getDependentObjsWith (== DROnType) sc colId
 
-              unless (null typeDepObjs) $ throw400 DependencyError $
+              unless (null typeDepObjs) $ throw400 (_DependencyError # ()) $
                 "cannot change type of column " <> oldName <<> " in table "
                 <> tn <<> " because of the following dependencies : " <>
                 reportSchemaObjs typeDepObjs
@@ -253,17 +253,17 @@ processTableChanges ti tableDiff = do
       let ComputedFieldDiff _ altered overloaded = computedFieldDiff
           getFunction = fmFunction . ccmFunctionMeta
       forM_ overloaded $ \(columnName, function) ->
-        throw400 NotSupported $ "The function " <> function
+        throw400 (_NotSupported # ()) $ "The function " <> function
         <<> " associated with computed field" <> columnName
         <<> " of table " <> table <<> " is being overloaded"
       forM_ altered $ \(old, new) ->
         if | (fmType . ccmFunctionMeta) new == FTVOLATILE ->
-             throw400 NotSupported $ "The type of function " <> getFunction old
+             throw400 (_NotSupported # ()) $ "The type of function " <> getFunction old
              <<> " associated with computed field " <> ccmName old
              <<> " of table " <> table <<> " is being altered to \"VOLATILE\""
            | otherwise -> pure ()
 
-delTableAndDirectDeps :: (MonadTx m) => QualifiedTable -> m ()
+delTableAndDirectDeps :: (MonadTx code m, AsCodeHasura code) => QualifiedTable -> m ()
 delTableAndDirectDeps qtn@(QualifiedObject sn tn) = do
   liftTx $ Q.catchE defaultTxErrorHandler $ do
     Q.unitQ [Q.sql|
@@ -288,9 +288,10 @@ delTableAndDirectDeps qtn@(QualifiedObject sn tn) = do
 -- '_tiRolePermInfoMap' or '_tiEventTriggerInfoMap' at all, and '_tiFieldInfoMap' only contains
 -- columns, not relationships; those pieces of information are filled in by later stages.
 buildTableCache
-  :: forall arr m
+  :: forall arr m code
    . ( ArrowChoice arr, Inc.ArrowDistribute arr, ArrowWriter (Seq CollectedInfo) arr
-     , Inc.ArrowCache m arr, MonadTx m )
+     , Inc.ArrowCache m arr, MonadTx code m, AsCodeHasura code
+     )
   => ( [CatalogTable]
      , Inc.Dependency Inc.InvalidationKey
      ) `arr` M.HashMap QualifiedTable TableRawInfo
@@ -308,17 +309,17 @@ buildTableCache = Inc.cache proc (catalogTables, reloadMetadataInvalidationKey) 
     |) rawTableCache
   returnA -< M.catMaybes tableInfos
   where
-    withTable :: ErrorA QErr arr (e, s) a -> arr (e, (QualifiedTable, s)) (Maybe a)
+    withTable :: ErrorA (QErr code) arr (e, s) a -> arr (e, (QualifiedTable, s)) (Maybe a)
     withTable f = withRecordInconsistency f <<<
       second (first $ arr \name -> MetadataObject (MOTable name) (toJSON name))
 
     noDuplicateTables = proc tables -> case tables of
       table :| [] -> returnA -< table
-      _           -> throwA -< err400 AlreadyExists "duplication definition for table"
+      _           -> throwA -< err400 (_AlreadyExists # ()) "duplication definition for table"
 
     -- Step 1: Build the raw table cache from metadata information.
     buildRawTableInfo
-      :: ErrorA QErr arr
+      :: ErrorA (QErr code) arr
        ( CatalogTable
        , Inc.Dependency Inc.InvalidationKey
        ) (TableCoreInfoG PGRawColumnInfo PGCol)
@@ -326,7 +327,7 @@ buildTableCache = Inc.cache proc (catalogTables, reloadMetadataInvalidationKey) 
       let CatalogTable name systemDefined isEnum config maybeInfo = catalogTable
       catalogInfo <-
         (| onNothingA (throwA -<
-             err400 NotExists $ "no such table/view exists in postgres: " <>> name)
+             err400 (_NotExists # ()) $ "no such table/view exists in postgres: " <>> name)
         |) maybeInfo
 
       let columns = _ctiColumns catalogInfo
@@ -357,7 +358,7 @@ buildTableCache = Inc.cache proc (catalogTables, reloadMetadataInvalidationKey) 
     -- Step 2: Process the raw table cache to replace Postgres column types with logical column
     -- types.
     processTableInfo
-      :: ErrorA QErr arr
+      :: ErrorA (QErr code) arr
        ( M.HashMap QualifiedTable (PrimaryKey PGCol, EnumValues)
        , TableCoreInfoG PGRawColumnInfo PGCol
        ) TableRawInfo
@@ -376,13 +377,13 @@ buildTableCache = Inc.cache proc (catalogTables, reloadMetadataInvalidationKey) 
         }
 
     resolvePrimaryKeyColumns
-      :: (QErrM n) => HashMap FieldName a -> PrimaryKey PGCol -> n (PrimaryKey a)
+      :: (QErrM n code, AsCodeHasura code) => HashMap FieldName a -> PrimaryKey PGCol -> n (PrimaryKey a)
     resolvePrimaryKeyColumns columnMap = traverseOf (pkColumns.traverse) \columnName ->
       M.lookup (fromPGCol columnName) columnMap
         `onNothing` throw500 "column in primary key not in table!"
 
     alignCustomColumnNames
-      :: (QErrM n)
+      :: (QErrM n code, AsCodeHasura code)
       => FieldInfoMap PGRawColumnInfo
       -> CustomColumnNames
       -> n (FieldInfoMap (PGRawColumnInfo, G.Name))
@@ -391,13 +392,13 @@ buildTableCache = Inc.cache proc (catalogTables, reloadMetadataInvalidationKey) 
       flip M.traverseWithKey (align columns customNamesByFieldName) \columnName -> \case
         This column -> pure (column, G.Name $ getFieldNameTxt columnName)
         These column customName -> pure (column, customName)
-        That customName -> throw400 NotExists $ "the custom field name " <> customName
+        That customName -> throw400 (_NotExists # ()) $ "the custom field name " <> customName
           <<> " was given for the column " <> columnName <<> ", but no such column exists"
 
     -- | “Processes” a 'PGRawColumnInfo' into a 'PGColumnInfo' by resolving its type using a map of
     -- known enum tables.
     processColumnInfo
-      :: (QErrM n)
+      :: (QErrM n code, AsCodeHasura code)
       => M.HashMap PGCol (NonEmpty EnumReference)
       -> QualifiedTable -- ^ the table this column belongs to
       -> (PGRawColumnInfo, G.Name)
@@ -421,7 +422,7 @@ buildTableCache = Inc.cache proc (catalogTables, reloadMetadataInvalidationKey) 
             -- one reference? is an enum
             Just (enumReference:|[]) -> pure $ PGColumnEnumReference enumReference
             -- multiple referenced enums? the schema is strange, so let’s reject it
-            Just enumReferences -> throw400 ConstraintViolation
+            Just enumReferences -> throw400 (_ConstraintViolation # ())
               $ "column " <> prciName rawInfo <<> " in table " <> tableName
               <<> " references multiple enum tables ("
               <> T.intercalate ", " (map (dquote . erTable) $ toList enumReferences) <> ")"
@@ -429,7 +430,7 @@ buildTableCache = Inc.cache proc (catalogTables, reloadMetadataInvalidationKey) 
     assertNoDuplicateFieldNames columns =
       flip M.traverseWithKey (M.groupOn pgiName columns) \name columnsWithName ->
         case columnsWithName of
-          one:two:more -> throw400 AlreadyExists $ "the definitions of columns "
+          one:two:more -> throw400 (_AlreadyExists # ()) $ "the definitions of columns "
             <> englishList (dquoteTxt . pgiColumn <$> (one:|two:more))
             <> " are in conflict: they are mapped to the same field name, " <>> name
           _ -> pure ()

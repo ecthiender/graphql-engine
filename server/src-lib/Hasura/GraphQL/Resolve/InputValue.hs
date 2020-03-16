@@ -37,14 +37,14 @@ import           Hasura.SQL.Types
 import           Hasura.SQL.Value
 
 withNotNull
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => G.NamedType -> Maybe a -> m a
 withNotNull nt v =
   onNothing v $ throw500 $
   "unexpected null for a value of type " <> showNamedTy nt
 
 tyMismatch
-  :: (MonadError (QErr a) m) => Text -> AnnInpVal -> m a
+  :: (MonadError (QErr code) m, AsCodeHasura code) => Text -> AnnInpVal -> m a
 tyMismatch expectedTy v =
   throw500 $ "expected " <> expectedTy <> ", found " <>
   getAnnInpValKind (_aivValue v) <> " for value of type " <>
@@ -79,7 +79,7 @@ openOpaqueValue :: (MonadReusability m) => OpaqueValue a -> m a
 openOpaqueValue (OpaqueValue v isVariable) = when isVariable markNotReusable $> v
 
 asPGColumnTypeAndValueM
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => AnnInpVal
   -> m (PGColumnType, WithScalarType (Maybe (OpaqueValue PGScalarValue)))
 asPGColumnTypeAndValueM v = do
@@ -101,7 +101,11 @@ asPGColumnTypeAndValueM v = do
   pure (columnType, fmap (flip OpaqueValue isVariable) <$> scalarValueM)
 
 asPGColumnTypeAndAnnValueM
-  :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m (PGColumnType, Maybe OpaquePGValue)
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
+  => AnnInpVal -> m (PGColumnType, Maybe OpaquePGValue)
 asPGColumnTypeAndAnnValueM v = do
   (columnType, scalarValueM) <- asPGColumnTypeAndValueM v
   let mkAnnPGColVal = AnnPGVal (_aivVariable v) (G.isNullable (_aivType v))
@@ -109,10 +113,20 @@ asPGColumnTypeAndAnnValueM v = do
         OpaqueValue (mkAnnPGColVal (WithScalarType scalarType scalarValue)) isVariable
   pure (columnType, replaceOpaqueValue <$> sequence scalarValueM)
 
-asPGColumnValueM :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m (Maybe OpaquePGValue)
+asPGColumnValueM
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
+  => AnnInpVal -> m (Maybe OpaquePGValue)
 asPGColumnValueM = fmap snd . asPGColumnTypeAndAnnValueM
 
-asPGColumnValue :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m OpaquePGValue
+asPGColumnValue
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
+  => AnnInpVal -> m OpaquePGValue
 asPGColumnValue v = do
   (columnType, annPGValM) <- asPGColumnTypeAndAnnValueM v
   onNothing annPGValM $ throw500 ("unexpected null for type " <>> columnType)
@@ -122,19 +136,33 @@ openInputValue v = when (isJust $ _aivVariable v) markNotReusable $> _aivValue v
 
 -- | Note: only handles “synthetic” enums (see 'EnumValuesInfo'). Enum table references are handled
 -- by 'asPGColumnType' and its variants.
-asEnumVal :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m (G.NamedType, G.EnumValue)
+asEnumVal
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
+  => AnnInpVal -> m (G.NamedType, G.EnumValue)
 asEnumVal = asEnumValM >=> \case
   (ty, Just val) -> pure (ty, val)
   (ty, Nothing)  -> throw500 $ "unexpected null for ty " <> showNamedTy ty
 
 -- | Like 'asEnumVal', only handles “synthetic” enums.
-asEnumValM :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m (G.NamedType, Maybe G.EnumValue)
+asEnumValM
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
+  => AnnInpVal -> m (G.NamedType, Maybe G.EnumValue)
 asEnumValM v = openInputValue v >>= \case
   AGEnum ty (AGESynthetic valM) -> return (ty, valM)
   _                             -> tyMismatch "enum" v
 
 withObject
-  :: (MonadReusability m, MonadError (QErr a) m) => (G.NamedType -> AnnGObject -> m a) -> AnnInpVal -> m a
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
+  => (G.NamedType -> AnnGObject -> m a) -> AnnInpVal -> m a
 withObject fn v = openInputValue v >>= \case
   AGObject nt (Just obj) -> fn nt obj
   AGObject _ Nothing     ->
@@ -142,28 +170,36 @@ withObject fn v = openInputValue v >>= \case
     <> G.showGT (_aivType v)
   _                      -> tyMismatch "object" v
 
-asObject :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m AnnGObject
+asObject :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code) => AnnInpVal -> m AnnGObject
 asObject = withObject (\_ o -> return o)
 
 withObjectM
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => (G.NamedType -> Maybe AnnGObject -> m a) -> AnnInpVal -> m a
 withObjectM fn v = openInputValue v >>= \case
   AGObject nt objM -> fn nt objM
   _                -> tyMismatch "object" v
 
-asObjectM :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m (Maybe AnnGObject)
+asObjectM
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
+  => AnnInpVal -> m (Maybe AnnGObject)
 asObjectM = withObjectM (\_ o -> return o)
 
 withArrayM
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: ( MonadReusability m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => (G.ListType -> Maybe [AnnInpVal] -> m a) -> AnnInpVal -> m a
 withArrayM fn v = openInputValue v >>= \case
   AGArray lt listM -> fn lt listM
   _                -> tyMismatch "array" v
 
 withArray
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => (G.ListType -> [AnnInpVal] -> m a) -> AnnInpVal -> m a
 withArray fn v = openInputValue v >>= \case
   AGArray lt (Just l) -> fn lt l
@@ -171,29 +207,29 @@ withArray fn v = openInputValue v >>= \case
                          <> G.showGT (_aivType v)
   _                   -> tyMismatch "array" v
 
-asArray :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m [AnnInpVal]
+asArray :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code) => AnnInpVal -> m [AnnInpVal]
 asArray = withArray (\_ vals -> return vals)
 
 parseMany
-  :: (MonadReusability m, MonadError (QErr a) m) => (AnnInpVal -> m a) -> AnnInpVal -> m (Maybe [a])
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code) => (AnnInpVal -> m a) -> AnnInpVal -> m (Maybe [a])
 parseMany fn v = openInputValue v >>= \case
   AGArray _ arrM -> mapM (mapM fn) arrM
   _              -> tyMismatch "array" v
 
 onlyText
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => PGScalarValue -> m Text
 onlyText = \case
   PGValText t    -> return t
   PGValVarchar t -> return t
   _           -> throw500 "expecting text for asPGColText"
 
-asPGColText :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m Text
+asPGColText :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code) => AnnInpVal -> m Text
 asPGColText val = do
   pgColVal <- openOpaqueValue =<< asPGColumnValue val
   onlyText (pstValue $ _apvValue pgColVal)
 
-asPGColTextM :: (MonadReusability m, MonadError (QErr a) m) => AnnInpVal -> m (Maybe Text)
+asPGColTextM :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code) => AnnInpVal -> m (Maybe Text)
 asPGColTextM val = do
   pgColValM <- traverse openOpaqueValue =<< asPGColumnValueM val
   traverse onlyText (pstValue . _apvValue <$> pgColValM)

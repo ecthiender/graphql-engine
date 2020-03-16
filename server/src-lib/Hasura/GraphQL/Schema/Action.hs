@@ -122,7 +122,7 @@ mkQueryField actionName comment definition definitionList =
         idDescription = G.Description $ "id of the action: " <>> actionName
 
 mkActionFieldsAndTypes
-  :: ((QErr a)M m)
+  :: (QErrM m code)
   => ActionInfo
   -> AnnotatedObjectType
   -> ActionPermissionInfo
@@ -219,7 +219,7 @@ mkActionFieldsAndTypes actionInfo annotatedOutputType permission =
       G.getBaseType $ unGraphQLType $ _adOutputType $ _aiDefinition actionInfo
 
 mkActionSchemaOne
-  :: ((QErr a)M m)
+  :: (QErrM m code, AsCodeHasura code)
   => AnnotatedObjects
   -> ActionInfo
   -> m (Map.HashMap RoleName
@@ -241,7 +241,7 @@ mkActionSchemaOne annotatedObjects actionInfo = do
       G.getBaseType $ unGraphQLType $ _adOutputType $ _aiDefinition actionInfo
 
 mkActionsSchema
-  :: ((QErr a)M m)
+  :: (QErrM m code, AsCodeHasura code)
   => AnnotatedObjects
   -> ActionCache
   -> m (Map.HashMap RoleName (RootFields, TyAgg))

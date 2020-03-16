@@ -16,6 +16,7 @@ module Hasura.RQL.DDL.Schema.Enum (
 
 import           Hasura.Prelude
 
+import           Control.Lens
 import           Control.Monad.Validate
 import           Data.List                     (delete)
 
@@ -65,15 +66,15 @@ data EnumTableIntegrityError
   deriving (Show, Eq)
 
 fetchAndValidateEnumValues
-  :: (MonadTx m)
+  :: (MonadTx code m, AsCodeHasura code)
   => QualifiedTable
   -> Maybe (PrimaryKey PGRawColumnInfo)
   -> [PGRawColumnInfo]
   -> m EnumValues
 fetchAndValidateEnumValues tableName maybePrimaryKey columnInfos =
-  either (throw400 ConstraintViolation . showErrors) pure =<< runValidateT fetchAndValidate
+  either (throw400 (_ConstraintViolation # ()) . showErrors) pure =<< runValidateT fetchAndValidate
   where
-    fetchAndValidate :: (MonadTx m, MonadValidate [EnumTableIntegrityError] m) => m EnumValues
+    -- fetchAndValidate :: (MonadError (QErr code) m, AsCodeHasura code, MonadTx code m, MonadValidate [EnumTableIntegrityError] m) => m EnumValues
     fetchAndValidate = do
       primaryKeyColumn <- tolerate validatePrimaryKey
       maybeCommentColumn <- validateColumns primaryKeyColumn

@@ -205,7 +205,7 @@ updateJwkRef (Logger logger) manager url jwkRef = do
 -- | Process the request headers to verify the JWT and extract UserInfo from it
 processJwt
   :: ( MonadIO m
-     , MonadError QErr m)
+     , MonadError (QErr code) m)
   => JWTCtx
   -> HTTP.RequestHeaders
   -> Maybe RoleName
@@ -228,7 +228,7 @@ processJwt jwtCtx headers mUnAuthRole =
 
 processAuthZHeader
   :: ( MonadIO m
-     , MonadError QErr m)
+     , MonadError (QErr code) m)
   => JWTCtx
   -> HTTP.RequestHeaders
   -> BLC.ByteString
@@ -321,7 +321,7 @@ processAuthZHeader jwtCtx headers authzHeader = do
 
 -- parse x-hasura-allowed-roles, x-hasura-default-role from JWT claims
 parseHasuraClaims
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m)
   => J.Object -> m HasuraClaims
 parseHasuraClaims claimsMap = do
   let mAllowedRolesV = Map.lookup allowedRolesClaim claimsMap
@@ -345,7 +345,7 @@ parseHasuraClaims claimsMap = do
 
     errMsg _ = "invalid " <> allowedRolesClaim <> "; should be a list of roles"
 
-    parseJwtClaim :: (MonadError QErr m) => J.Result a -> (String -> Text) -> m a
+    parseJwtClaim :: (MonadError (QErr code) m) => J.Result a -> (String -> Text) -> m a
     parseJwtClaim res errFn =
       case res of
         J.Success val -> return val

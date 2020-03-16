@@ -124,7 +124,7 @@ class (Monad m) => HttpLog m where
     -- ^ the Wai.Request object
     -> Either BL.ByteString Value
     -- ^ the actual request body (bytestring if unparsed, Aeson value if parsed)
-    -> QErr
+    -> QErr code
     -- ^ the error
     -> [HTTP.Header]
     -- ^ list of request headers
@@ -179,7 +179,7 @@ instance ToJSON HttpInfoLog where
            ]
 
 -- | Information about a GraphQL/Hasura metadata operation over HTTP
-data OperationLog
+data OperationLog code
   = OperationLog
   { olRequestId          :: !RequestId
   , olUserVars           :: !(Maybe UserVars)
@@ -190,17 +190,18 @@ data OperationLog
   -- ^ Service time, not including request IO wait time.
   , olQuery              :: !(Maybe Value)
   , olRawQuery           :: !(Maybe Text)
-  , olError              :: !(Maybe QErr)
+  , olError              :: !(Maybe (QErr code))
   } deriving (Show, Eq)
 
-$(deriveToJSON (aesonDrop 2 snakeCase)
-  { omitNothingFields = True
-  } ''OperationLog)
+-- deriving instance Show code => Show (OperationLog code)
 
-data HttpLogContext
+-- deriving instance Show code
+$(deriveToJSON (aesonDrop 2 snakeCase) { omitNothingFields = True} ''OperationLog)
+
+data HttpLogContext code
   = HttpLogContext
   { hlcHttpInfo  :: !HttpInfoLog
-  , hlcOperation :: !OperationLog
+  , hlcOperation :: !(OperationLog code)
   } deriving (Show, Eq)
 $(deriveToJSON (aesonDrop 3 snakeCase) ''HttpLogContext)
 
@@ -213,7 +214,7 @@ mkHttpAccessLogContext
   -> Maybe (DiffTime, DiffTime)
   -> Maybe CompressionType
   -> [HTTP.Header]
-  -> HttpLogContext
+  -> HttpLogContext code
 mkHttpAccessLogContext userInfoM reqId req res mTiming compressTypeM headers =
   let http = HttpInfoLog
              { hlStatus      = status
@@ -240,16 +241,17 @@ mkHttpAccessLogContext userInfoM reqId req res mTiming compressTypeM headers =
     respSize = Just $ BL.length res
 
 mkHttpErrorLogContext
-  :: Maybe UserInfo
+  :: Show code
+  => Maybe UserInfo
   -- ^ Maybe because it may not have been resolved
   -> RequestId
   -> Wai.Request
-  -> QErr
+  -> QErr code
   -> Either BL.ByteString Value
   -> Maybe (DiffTime, DiffTime)
   -> Maybe CompressionType
   -> [HTTP.Header]
-  -> HttpLogContext
+  -> HttpLogContext code
 mkHttpErrorLogContext userInfoM reqId req err query mTiming compressTypeM headers =
   let http = HttpInfoLog
              { hlStatus      = qeStatus err
@@ -272,17 +274,17 @@ mkHttpErrorLogContext userInfoM reqId req err query mTiming compressTypeM header
            }
   in HttpLogContext http op
 
-data HttpLogLine
+data HttpLogLine code
   = HttpLogLine
   { _hlLogLevel :: !LogLevel
-  , _hlLogLine  :: !HttpLogContext
+  , _hlLogLine  :: !(HttpLogContext code)
   }
 
-instance ToEngineLog HttpLogLine Hasura where
+instance ToJSON code => ToEngineLog (HttpLogLine code) Hasura where
   toEngineLog (HttpLogLine logLevel logLine) =
     (logLevel, ELTHttpLog, toJSON logLine)
 
-mkHttpLog :: HttpLogContext -> HttpLogLine
+mkHttpLog :: HttpLogContext code -> HttpLogLine code
 mkHttpLog httpLogCtx =
   let isError = isJust $ olError $ hlcOperation httpLogCtx
       logLevel = bool LevelInfo LevelError isError

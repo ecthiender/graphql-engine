@@ -83,8 +83,8 @@ recordDependencies = proc (metadataObject, schemaObjectId, dependencies) ->
   tellA -< Seq.fromList $ map (CIDependency metadataObject schemaObjectId) dependencies
 
 withRecordInconsistency
-  :: (ArrowChoice arr, ArrowWriter (Seq w) arr, AsInconsistentMetadata w)
-  => ErrorA QErr arr (e, s) a
+  :: (ArrowChoice arr, ArrowWriter (Seq w) arr, AsInconsistentMetadata w {-, AsCodeHasura code-})
+  => ErrorA (QErr code) arr (e, s) a
   -> arr (e, (MetadataObject, s)) (Maybe a)
 withRecordInconsistency f = proc (e, (metadataObject, s)) -> do
   result <- runErrorA f -< (e, s)
@@ -135,7 +135,7 @@ buildSchemaCache = buildSchemaCacheWithOptions CatalogUpdate mempty
 
 -- | Rebuilds the schema cache. If an object with the given object id became newly inconsistent,
 -- raises an error about it specifically. Otherwise, raises a generic metadata inconsistency error.
-buildSchemaCacheFor :: (QErrM m, CacheRWM m) => MetadataObjId -> m ()
+buildSchemaCacheFor :: (AsCodeHasura code, QErrM m code, CacheRWM m) => MetadataObjId -> m ()
 buildSchemaCacheFor objectId = do
   oldSchemaCache <- askSchemaCache
   buildSchemaCache
@@ -146,25 +146,25 @@ buildSchemaCacheFor objectId = do
 
   for_ (M.lookup objectId newInconsistentObjects) $ \matchingObjects -> do
     let reasons = T.intercalate ", " $ map imReason $ toList matchingObjects
-    throwError (err400 ConstraintViolation reasons) { qeInternal = Just $ toJSON matchingObjects }
+    throwError (err400 (_ConstraintViolation # ()) reasons) { qeInternal = Just $ toJSON matchingObjects }
 
   unless (null newInconsistentObjects) $
-    throwError (err400 Unexpected "cannot continue due to new inconsistent metadata")
+    throwError (err400 (_Unexpected # ()) "cannot continue due to new inconsistent metadata")
       { qeInternal = Just $ toJSON (nub . concatMap toList $ M.elems newInconsistentObjects) }
 
 -- | Like 'buildSchemaCache', but fails if there is any inconsistent metadata.
-buildSchemaCacheStrict :: (QErrM m, CacheRWM m) => m ()
+buildSchemaCacheStrict :: (QErrM m code, AsCodeHasura code, CacheRWM m) => m ()
 buildSchemaCacheStrict = do
   buildSchemaCache
   sc <- askSchemaCache
   let inconsObjs = scInconsistentObjs sc
   unless (null inconsObjs) $ do
-    let err = err400 Unexpected "cannot continue due to inconsistent metadata"
+    let err = err400 (_Unexpected # ()) "cannot continue due to inconsistent metadata"
     throwError err{ qeInternal = Just $ toJSON inconsObjs }
 
 -- | Executes the given action, and if any new 'InconsistentMetadata's are added to the schema
 -- cache as a result of its execution, raises an error.
-withNewInconsistentObjsCheck :: (QErrM m, CacheRM m) => m a -> m a
+withNewInconsistentObjsCheck :: (QErrM m code, AsCodeHasura code, CacheRM m) => m a -> m a
 withNewInconsistentObjsCheck action = do
   originalObjects <- scInconsistentObjs <$> askSchemaCache
   result <- action
@@ -174,7 +174,7 @@ withNewInconsistentObjsCheck action = do
       newInconsistentObjects =
         nub $ concatMap toList $ M.elems (currentObjects `diffInconsistentObjects` originalObjects)
   unless (null newInconsistentObjects) $
-    throwError (err500 Unexpected "cannot continue due to newly found inconsistent metadata")
+    throwError (err500 (_Unexpected # ()) "cannot continue due to newly found inconsistent metadata")
       { qeInternal = Just $ toJSON newInconsistentObjects }
 
   pure result

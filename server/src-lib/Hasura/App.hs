@@ -328,7 +328,7 @@ runAsAdmin pool sqlGenCtx httpManager m = do
 execQuery
   :: ( HasVersion
      , CacheRWM m
-     , MonadTx m
+     , MonadTx code m
      , MonadIO m
      , HasHttpManager m
      , HasSQLGenCtx m

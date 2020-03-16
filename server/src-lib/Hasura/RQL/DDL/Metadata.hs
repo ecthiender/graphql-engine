@@ -41,7 +41,7 @@ import qualified Hasura.RQL.DDL.QueryCollection     as Collection
 import qualified Hasura.RQL.DDL.Relationship        as Relationship
 import qualified Hasura.RQL.DDL.Schema              as Schema
 
-clearMetadata :: Q.TxE QErr ()
+clearMetadata :: Q.TxE (QErr code) ()
 clearMetadata = Q.catchE defaultTxErrorHandler $ do
   Q.unitQ "DELETE FROM hdb_catalog.hdb_function WHERE is_system_defined <> 'true'" () False
   Q.unitQ "DELETE FROM hdb_catalog.hdb_permission WHERE is_system_defined <> 'true'" () False
@@ -57,7 +57,7 @@ clearMetadata = Q.catchE defaultTxErrorHandler $ do
   Q.unitQ "DELETE FROM hdb_catalog.hdb_action WHERE is_system_defined <> 'true'" () False
 
 runClearMetadata
-  :: (MonadTx m, CacheRWM m)
+  :: (MonadTx code m, CacheRWM m)
   => ClearMetadata -> m EncJSON
 runClearMetadata _ = do
   liftTx clearMetadata
@@ -65,7 +65,7 @@ runClearMetadata _ = do
   return successMsg
 
 applyQP1
-  :: (QErrM m)
+  :: (QErrM m code)
   => ReplaceMetadata -> m ()
 applyQP1 (ReplaceMetadata _ tables functionsMeta schemas collections
           allowlist _ actions) = do
@@ -127,7 +127,7 @@ applyQP1 (ReplaceMetadata _ tables functionsMeta schemas collections
 applyQP2
   :: ( HasVersion
      , MonadIO m
-     , MonadTx m
+     , MonadTx code m
      , CacheRWM m
      , HasSystemDefined m
      , HasHttpManager m
@@ -222,7 +222,7 @@ applyQP2 (ReplaceMetadata _ tables functionsMeta
 runReplaceMetadata
   :: ( HasVersion
      , MonadIO m
-     , MonadTx m
+     , MonadTx code m
      , CacheRWM m
      , HasSystemDefined m
      , HasHttpManager m
@@ -232,7 +232,7 @@ runReplaceMetadata q = do
   applyQP1 q
   applyQP2 q
 
-fetchMetadata :: Q.TxE QErr ReplaceMetadata
+fetchMetadata :: Q.TxE (QErr code) ReplaceMetadata
 fetchMetadata = do
   tables <- Q.catchE defaultTxErrorHandler fetchTables
   let tableMetaMap = HMIns.fromList . flip map tables $
@@ -389,7 +389,7 @@ fetchMetadata = do
                           , ComputedFieldMeta name definition comment
                           )
 
-    fetchCustomTypes :: Q.TxE QErr CustomTypes
+    fetchCustomTypes :: Q.TxE (QErr code) CustomTypes
     fetchCustomTypes =
       Q.getAltJ . runIdentity . Q.getRow <$>
       Q.rawQE defaultTxErrorHandler [Q.sql|
@@ -430,25 +430,25 @@ fetchMetadata = do
                             |] [] False
 
 runExportMetadata
-  :: (QErrM m, MonadTx m)
+  :: (QErrM m code, MonadTx code m)
   => ExportMetadata -> m EncJSON
 runExportMetadata _ =
   (AO.toEncJSON . replaceMetadataToOrdJSON) <$> liftTx fetchMetadata
 
-runReloadMetadata :: (QErrM m, CacheRWM m) => ReloadMetadata -> m EncJSON
+runReloadMetadata :: (QErrM m code, CacheRWM m) => ReloadMetadata -> m EncJSON
 runReloadMetadata ReloadMetadata = do
   buildSchemaCacheWithOptions CatalogUpdate mempty { ciMetadata = True }
   return successMsg
 
 runDumpInternalState
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, CacheRM m)
   => DumpInternalState -> m EncJSON
 runDumpInternalState _ =
   encJFromJValue <$> askSchemaCache
 
 
 runGetInconsistentMetadata
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, CacheRM m)
   => GetInconsistentMetadata -> m EncJSON
 runGetInconsistentMetadata _ = do
   inconsObjs <- scInconsistentObjs <$> askSchemaCache
@@ -458,7 +458,7 @@ runGetInconsistentMetadata _ = do
                 ]
 
 runDropInconsistentMetadata
-  :: (QErrM m, CacheRWM m, MonadTx m)
+  :: (QErrM m code, CacheRWM m, MonadTx code m)
   => DropInconsistentMetadata -> m EncJSON
 runDropInconsistentMetadata _ = do
   sc <- askSchemaCache
@@ -471,7 +471,7 @@ runDropInconsistentMetadata _ = do
   buildSchemaCacheStrict
   return successMsg
 
-purgeMetadataObj :: MonadTx m => MetadataObjId -> m ()
+purgeMetadataObj :: MonadTx code m => MetadataObjId -> m ()
 purgeMetadataObj = liftTx . \case
   MOTable qt                            -> Schema.deleteTableFromCatalog qt
   MOFunction qf                         -> Schema.delFunctionFromCatalog qf

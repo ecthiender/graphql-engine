@@ -42,17 +42,21 @@ data PGExecCtx
   , _pecTxIsolation :: !Q.TxIsolation
   }
 
-class (forall code m. (MonadError (QErr code) m, AsCodeHasura code)) => MonadTx m where
+-- (forall code m. MonadError (QErr code) m) => MonadTx code m
+class (MonadError (QErr code) m) => MonadTx code m where
   liftTx :: Q.TxE (QErr code) a -> m a
 
-instance (MonadTx m) => MonadTx (StateT s m) where
+instance (MonadTx code m) => MonadTx code (StateT s m) where
   liftTx = lift . liftTx
-instance (MonadTx m) => MonadTx (ReaderT s m) where
+instance (MonadTx code m) => MonadTx code (ReaderT s m) where
   liftTx = lift . liftTx
-instance (Monoid w, MonadTx m) => MonadTx (WriterT w m) where
+instance (Monoid w, MonadTx code m) => MonadTx code (WriterT w m) where
   liftTx = lift . liftTx
-instance (MonadTx m) => MonadTx (ValidateT e m) where
+instance (MonadTx code m) => MonadTx code (ValidateT e m) where
   liftTx = lift . liftTx
+instance (MonadTx code m) => MonadTx code (ExceptT (QErr code) m) where
+  liftTx = lift . liftTx
+
 
 -- | Like 'Q.TxE', but defers acquiring a Postgres connection until the first execution of 'liftTx'.
 -- If no call to 'liftTx' is ever reached (i.e. a successful result is returned or an error is
@@ -74,17 +78,18 @@ lazyTxToQTx = \case
   LTTx tx  -> tx
 
 runLazyTx
-  :: (MonadIO m, AsCodeHasura c)
+  :: (MonadIO m, AsCodeHasura code)
   => PGExecCtx
   -> Q.TxAccess
-  -> LazyTx (QErr c) a -> ExceptT (QErr c) m a
+  -> LazyTx (QErr code) a
+  -> ExceptT (QErr code) m a
 runLazyTx (PGExecCtx pgPool txIso) txAccess = \case
   LTErr e  -> throwError e
   LTNoTx a -> return a
   LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx pgPool (txIso, Just txAccess) tx
 
 runLazyTx'
-  :: (MonadIO m, AsCodeHasura c) => PGExecCtx -> LazyTx (QErr c) a -> ExceptT (QErr c) m a
+  :: (MonadIO m, AsCodeHasura code) => PGExecCtx -> LazyTx (QErr code) a -> ExceptT (QErr code) m a
 runLazyTx' (PGExecCtx pgPool _) = \case
   LTErr e  -> throwError e
   LTNoTx a -> return a
@@ -93,7 +98,7 @@ runLazyTx' (PGExecCtx pgPool _) = \case
 type RespTx code = Q.TxE (QErr code) EncJSON
 type LazyRespTx code = LazyTx (QErr code) EncJSON
 
-setHeadersTx :: AsCodeHasura c => UserVars -> Q.TxE (QErr c) ()
+setHeadersTx :: AsCodeHasura code => UserVars -> Q.TxE (QErr code) ()
 setHeadersTx uVars =
   Q.unitQE defaultTxErrorHandler setSess () False
   where
@@ -103,12 +108,12 @@ setHeadersTx uVars =
 sessionInfoJsonExp :: UserVars -> S.SQLExp
 sessionInfoJsonExp = S.SELit . J.encodeToStrictText
 
-defaultTxErrorHandler :: AsCodeHasura c => Q.PGTxErr -> QErr c
+defaultTxErrorHandler :: AsCodeHasura code => Q.PGTxErr -> QErr code
 defaultTxErrorHandler = mkTxErrorHandler (const False)
 
 -- | Constructs a transaction error handler given a predicate that determines which errors are
 -- expected and should be reported to the user. All other errors are considered internal errors.
-mkTxErrorHandler :: AsCodeHasura c => (PGErrorType -> Bool) -> Q.PGTxErr -> QErr c
+mkTxErrorHandler :: AsCodeHasura code => (PGErrorType -> Bool) -> Q.PGTxErr -> QErr code
 mkTxErrorHandler isExpectedError txe = fromMaybe unexpectedError expectedError
   where
     unexpectedError = (internalError "postgres query error") { qeInternal = Just $ J.toJSON txe }
@@ -119,25 +124,25 @@ mkTxErrorHandler isExpectedError txe = fromMaybe unexpectedError expectedError
       guard $ isExpectedError errorType
       pure $ case errorType of
         PGIntegrityConstraintViolation code ->
-          let cv = (review _ConstraintViolation (),)
+          let cv = (_ConstraintViolation # (),)
               customMessage = (code ^? _Just._PGErrorSpecific) <&> \case
                 PGRestrictViolation -> cv "Can not delete or update due to data being referred. "
                 PGNotNullViolation -> cv "Not-NULL violation. "
                 PGForeignKeyViolation -> cv "Foreign key violation. "
                 PGUniqueViolation -> cv "Uniqueness violation. "
-                PGCheckViolation -> (review _PermissionError (), "Check constraint violation. ")
+                PGCheckViolation -> (_PermissionError # (), "Check constraint violation. ")
                 PGExclusionViolation -> cv "Exclusion violation. "
-          in maybe (review _ConstraintViolation (), message) (fmap (<> message)) customMessage
+          in maybe (_ConstraintViolation # (), message) (fmap (<> message)) customMessage
         PGDataException code -> case code of
-          Just (PGErrorSpecific PGInvalidEscapeSequence) -> (review _BadRequest (), message)
-          _                                              -> (review _DataException (), message)
+          Just (PGErrorSpecific PGInvalidEscapeSequence) -> (_BadRequest # (), message)
+          _                                              -> (_DataException # (), message)
 
-        PGSyntaxErrorOrAccessRuleViolation code -> (review _ConstraintError (),) $ case code of
+        PGSyntaxErrorOrAccessRuleViolation code -> (_ConstraintError # (),) $ case code of
           Just (PGErrorSpecific PGInvalidColumnReference) ->
             "there is no unique or exclusion constraint on target column(s)"
           _ -> message
 
-withUserInfo :: AsCodeHasura c => UserInfo -> LazyTx (QErr c) a -> LazyTx (QErr c) a
+withUserInfo :: AsCodeHasura code => UserInfo -> LazyTx (QErr code) a -> LazyTx (QErr code) a
 withUserInfo uInfo = \case
   LTErr e  -> LTErr e
   LTNoTx a -> LTNoTx a
@@ -171,12 +176,15 @@ instance MonadError e (LazyTx e) where
   LTTx txe `catchError` f =
     LTTx $ txe `catchError` (lazyTxToQTx . f)
 
+-- instance MonadError (QErr code) m where
+--   throwError = undefined
+--   catchError = undefined
 
-instance MonadTx (LazyTx (QErr code)) where
-  liftTx = LTTx
+-- instance (forall code. MonadTx (LazyTx (QErr code))) where
+--   liftTx = LTTx
 
-instance MonadTx (Q.TxE (QErr code)) where
-  liftTx = id
+-- instance MonadTx (Q.TxE (QErr code)) where
+--   liftTx = id
 
 instance MonadIO (LazyTx e) where
   liftIO = LTTx . liftIO

@@ -51,7 +51,7 @@ class (Monad m) => UserAuthentication m where
     -> [N.Header]
     -- ^ request headers
     -> AuthMode
-    -> m (Either QErr (UserInfo, Maybe UTCTime))
+    -> m (Either (QErr code) (UserInfo, Maybe UTCTime))
 
 newtype AdminSecret
   = AdminSecret { getAdminSecret :: T.Text }
@@ -162,7 +162,7 @@ mkJwtCtx JWTConfig{..} httpManager logger = do
 
 -- | Form the 'UserInfo' from the response from webhook
 mkUserInfoFromResp
-  :: (MonadIO m, MonadError QErr m)
+  :: (MonadIO m, MonadError (QErr code) m)
   => Logger Hasura
   -> T.Text
   -> N.StdMethod
@@ -203,7 +203,7 @@ mkUserInfoFromResp logger url method statusCode respBody
         url method Nothing $ fmap (bsToTxt . BL.toStrict) mResp
 
 userInfoFromAuthHook
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
   => Logger Hasura
   -> H.Manager
   -> AuthHook
@@ -242,7 +242,7 @@ userInfoFromAuthHook logger manager hook reqHeaders = do
       n `notElem` commonClientHeadersIgnored
 
 getUserInfo
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
   => Logger Hasura
   -> H.Manager
   -> [N.Header]
@@ -251,7 +251,7 @@ getUserInfo
 getUserInfo l m r a = fst <$> getUserInfoWithExpTime l m r a
 
 getUserInfoWithExpTime
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
   => Logger Hasura
   -> H.Manager
   -> [N.Header]

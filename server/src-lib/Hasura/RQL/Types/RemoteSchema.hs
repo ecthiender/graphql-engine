@@ -1,5 +1,6 @@
 module Hasura.RQL.Types.RemoteSchema where
 
+import           Control.Lens
 import           Hasura.Prelude
 import           Hasura.RQL.Types.Common    (NonEmptyText)
 import           Language.Haskell.TH.Syntax (Lift)
@@ -77,19 +78,19 @@ newtype RemoteSchemaNameQuery
 
 $(J.deriveJSON (J.aesonDrop 5 J.snakeCase) ''RemoteSchemaNameQuery)
 
-getUrlFromEnv :: (MonadIO m, MonadError QErr m) => Text -> m N.URI
+getUrlFromEnv :: (MonadIO m, MonadError (QErr code) m, AsCodeHasura code) => Text -> m N.URI
 getUrlFromEnv urlFromEnv = do
   mEnv <- liftIO . lookupEnv $ T.unpack urlFromEnv
-  env  <- maybe (throw400 InvalidParams $ envNotFoundMsg urlFromEnv) return
+  env  <- maybe (throw400 (review _InvalidParams ()) $ envNotFoundMsg urlFromEnv) return
           mEnv
-  maybe (throw400 InvalidParams $ invalidUri env) return $ N.parseURI env
+  maybe (throw400 (review _InvalidParams ()) $ invalidUri env) return $ N.parseURI env
   where
     invalidUri uri = "not a valid URI: " <> T.pack uri
     envNotFoundMsg e =
       "environment variable '" <> e <> "' not set"
 
 validateRemoteSchemaDef
-  :: (MonadError QErr m, MonadIO m)
+  :: (MonadError (QErr code) m, AsCodeHasura code, MonadIO m)
   => RemoteSchemaDef
   -> m RemoteSchemaInfo
 validateRemoteSchemaDef (RemoteSchemaDef mUrl mUrlEnv hdrC fwdHdrs mTimeout) =
@@ -100,9 +101,9 @@ validateRemoteSchemaDef (RemoteSchemaDef mUrl mUrlEnv hdrC fwdHdrs mTimeout) =
       url <- getUrlFromEnv urlEnv
       return $ RemoteSchemaInfo url hdrs fwdHdrs timeout
     (Nothing, Nothing)     ->
-        throw400 InvalidParams "both `url` and `url_from_env` can't be empty"
+        throw400 (_InvalidParams # ()) "both `url` and `url_from_env` can't be empty"
     (Just _, Just _)       ->
-        throw400 InvalidParams "both `url` and `url_from_env` can't be present"
+        throw400 (review _InvalidParams ()) "both `url` and `url_from_env` can't be present"
   where
     hdrs = fromMaybe [] hdrC
 

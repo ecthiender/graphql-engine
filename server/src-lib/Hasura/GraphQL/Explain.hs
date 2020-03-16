@@ -81,7 +81,7 @@ getSessVarVal userInfo sessVar =
     usrVars = userVars userInfo
 
 explainField
-  :: (MonadTx m)
+  :: (MonadTx code m)
   => UserInfo -> GCtx -> SQLGenCtx -> GV.Field -> m FieldPlan
 explainField userInfo gCtx sqlGenCtx fld =
   case fName of

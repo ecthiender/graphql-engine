@@ -41,7 +41,7 @@ instance (MonadBase IO m) => TableCoreInfoRM (CacheRefT m)
 instance (MonadBase IO m) => CacheRM (CacheRefT m) where
   askSchemaCache = CacheRefT (fmap lastBuiltSchemaCache . readMVar)
 
-instance (MonadIO m, MonadBaseControl IO m, MonadTx m) => CacheRWM (CacheRefT m) where
+instance (MonadIO m, MonadBaseControl IO m, MonadTx code m) => CacheRWM (CacheRefT m) where
   buildSchemaCacheWithOptions reason invalidations = CacheRefT $ flip modifyMVar \schemaCache -> do
     ((), cache, _) <- runCacheRWT schemaCache (buildSchemaCacheWithOptions reason invalidations)
     pure (cache, ())
@@ -59,7 +59,7 @@ spec
   :: ( HasVersion
      , MonadIO m
      , MonadBaseControl IO m
-     , MonadTx m
+     , MonadTx code m
      , MonadUnique m
      , HasHttpManager m
      , HasSQLGenCtx m

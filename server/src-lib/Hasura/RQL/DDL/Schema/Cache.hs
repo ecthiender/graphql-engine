@@ -63,7 +63,7 @@ import           Hasura.Server.Version                    (HasVersion)
 import           Hasura.SQL.Types
 
 mergeCustomTypes
-  :: MonadError QErr f
+  :: MonadError (QErr code) f
   => M.HashMap RoleName GS.GCtx -> GS.GCtx -> (NonObjectTypeMap, AnnotatedObjects)
   -> f (GS.GCtxMap, GS.GCtx)
 mergeCustomTypes gCtxMap remoteSchemaCtx customTypesState = do
@@ -100,7 +100,7 @@ mergeCustomTypes gCtxMap remoteSchemaCtx customTypesState = do
         Nothing   -> GS._gTypes remoteSchemaCtx
 
 buildRebuildableSchemaCache
-  :: (HasVersion, MonadIO m, MonadUnique m, MonadTx m, HasHttpManager m, HasSQLGenCtx m)
+  :: (HasVersion, MonadIO m, MonadUnique m, MonadTx code m, HasHttpManager m, HasSQLGenCtx m)
   => m (RebuildableSchemaCache m)
 buildRebuildableSchemaCache = do
   catalogMetadata <- liftTx fetchCatalogData
@@ -130,7 +130,7 @@ instance (Monad m) => TableCoreInfoRM (CacheRWT m)
 instance (Monad m) => CacheRM (CacheRWT m) where
   askSchemaCache = CacheRWT $ gets (lastBuiltSchemaCache . fst)
 
-instance (MonadIO m, MonadTx m) => CacheRWM (CacheRWT m) where
+instance (MonadIO m, MonadTx code m) => CacheRWM (CacheRWT m) where
   buildSchemaCacheWithOptions buildReason invalidations = CacheRWT do
     (RebuildableSchemaCache _ invalidationKeys rule, oldInvalidations) <- get
     let newInvalidationKeys = invalidateKeys invalidations invalidationKeys
@@ -152,7 +152,7 @@ buildSchemaCacheRule
   -- Note: by supplying BuildReason via MonadReader, it does not participate in caching, which is
   -- what we want!
   :: ( HasVersion, ArrowChoice arr, Inc.ArrowDistribute arr, Inc.ArrowCache m arr
-     , MonadIO m, MonadTx m, MonadReader BuildReason m, HasHttpManager m, HasSQLGenCtx m )
+     , MonadIO m, MonadTx code m, MonadReader BuildReason m, HasHttpManager m, HasSQLGenCtx m )
   => (CatalogMetadata, InvalidationKeys) `arr` SchemaCache
 buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
   invalidationKeysDep <- Inc.newDependency -< invalidationKeys
@@ -191,7 +191,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
   where
     buildAndCollectInfo
       :: ( ArrowChoice arr, Inc.ArrowDistribute arr, Inc.ArrowCache m arr
-         , ArrowWriter (Seq CollectedInfo) arr, MonadIO m, MonadTx m, MonadReader BuildReason m
+         , ArrowWriter (Seq CollectedInfo) arr, MonadIO m, MonadTx code m, MonadReader BuildReason m
          , HasHttpManager m, HasSQLGenCtx m )
       => (CatalogMetadata, Inc.Dependency InvalidationKeys) `arr` BuildOutputs
     buildAndCollectInfo = proc (catalogMetadata, invalidationKeys) -> do
@@ -325,7 +325,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
 
     buildTableEventTriggers
       :: ( ArrowChoice arr, Inc.ArrowDistribute arr, ArrowWriter (Seq CollectedInfo) arr
-         , Inc.ArrowCache m arr, MonadIO m, MonadTx m, MonadReader BuildReason m, HasSQLGenCtx m )
+         , Inc.ArrowCache m arr, MonadIO m, MonadTx code m, MonadReader BuildReason m, HasSQLGenCtx m )
       => (TableCoreInfo, [CatalogEventTrigger]) `arr` EventTriggerInfoMap
     buildTableEventTriggers = buildInfoMap _cetName mkEventTriggerMetadataObject buildEventTrigger
       where
@@ -375,7 +375,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
     -- addition to the built GraphQL context.
     buildGQLSchema
       :: ( ArrowChoice arr, ArrowWriter (Seq InconsistentMetadata) arr, ArrowKleisli m arr
-         , MonadError QErr m )
+         , MonadError (QErr code) m )
       => ( TableCache
          , FunctionCache
          , HashMap RemoteSchemaName (RemoteSchemaCtx, MetadataObject)
@@ -404,7 +404,7 @@ buildSchemaCacheRule = proc (catalogMetadata, invalidationKeys) -> do
 -- | @'withMetadataCheck' cascade action@ runs @action@ and checks if the schema changed as a
 -- result. If it did, it checks to ensure the changes do not violate any integrity constraints, and
 -- if not, incorporates them into the schema cache.
-withMetadataCheck :: (MonadTx m, CacheRWM m, HasSQLGenCtx m) => Bool -> m a -> m a
+withMetadataCheck :: (MonadTx code m, CacheRWM m, HasSQLGenCtx m) => Bool -> m a -> m a
 withMetadataCheck cascade action = do
   -- Drop hdb_views so no interference is caused to the sql query
   liftTx $ Q.catchE defaultTxErrorHandler clearHdbViews
@@ -478,7 +478,7 @@ withMetadataCheck cascade action = do
   where
     reportFuncs = T.intercalate ", " . map dquoteTxt
 
-    processSchemaChanges :: (MonadTx m, CacheRM m) => SchemaDiff -> m ()
+    processSchemaChanges :: (MonadTx code m, CacheRM m) => SchemaDiff -> m ()
     processSchemaChanges schemaDiff = do
       -- Purge the dropped tables
       mapM_ delTableAndDirectDeps droppedTables
@@ -493,7 +493,7 @@ withMetadataCheck cascade action = do
         SchemaDiff droppedTables alteredTables = schemaDiff
 
     checkNewInconsistentMeta
-      :: (QErrM m)
+      :: (QErrM m code)
       => [InconsistentMetadata] -> [InconsistentMetadata] -> m ()
     checkNewInconsistentMeta originalInconsMeta currentInconsMeta =
       unless (null newInconsistentObjects) $

@@ -161,11 +161,11 @@ instance Q.ToPrepArg CohortVariablesArray where
       encoder = PE.array 114 . PE.dimensionArray foldl' (PE.encodingArray . PE.json_ast)
 
 executeMultiplexedQuery
-  :: (MonadTx m) => MultiplexedQuery -> [(CohortId, CohortVariables)] -> m [(CohortId, EncJSON)]
+  :: (MonadTx code m) => MultiplexedQuery -> [(CohortId, CohortVariables)] -> m [(CohortId, EncJSON)]
 executeMultiplexedQuery (MultiplexedQuery query) = executeQuery query
 
 -- | Internal; used by both 'executeMultiplexedQuery' and 'explainLiveQueryPlan'.
-executeQuery :: (MonadTx m, Q.FromRow a) => Q.Query -> [(CohortId, CohortVariables)] -> m [a]
+executeQuery :: (MonadTx code m, Q.FromRow a) => Q.Query -> [(CohortId, CohortVariables)] -> m [a]
 executeQuery query cohorts =
   let (cohortIds, cohortVars) = unzip cohorts
       preparedArgs = (CohortIdArray cohortIds, CohortVariablesArray cohortVars)
@@ -294,7 +294,7 @@ data LiveQueryPlanExplanation
   } deriving (Show)
 $(J.deriveToJSON (J.aesonDrop 5 J.snakeCase) ''LiveQueryPlanExplanation)
 
-explainLiveQueryPlan :: (MonadTx m, MonadIO m) => LiveQueryPlan -> m LiveQueryPlanExplanation
+explainLiveQueryPlan :: (MonadTx code m, MonadIO m) => LiveQueryPlan -> m LiveQueryPlanExplanation
 explainLiveQueryPlan plan = do
   let parameterizedPlan = _lqpParameterizedPlan plan
       queryText = Q.getQueryText . unMultiplexedQuery $ _plqpQuery parameterizedPlan

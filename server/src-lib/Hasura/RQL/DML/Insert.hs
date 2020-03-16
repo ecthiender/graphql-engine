@@ -1,5 +1,6 @@
 module Hasura.RQL.DML.Insert where
 
+import           Control.Lens             (( # ))
 import           Data.Aeson.Types
 import           Instances.TH.Lift        ()
 
@@ -71,7 +72,7 @@ toSQLConflict conflict = case conflict of
       CTConstraint cn -> S.SQLConstraint cn
 
 convObj
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => (PGColumnType -> Value -> m S.SQLExp)
   -> HM.HashMap PGCol S.SQLExp
   -> HM.HashMap PGCol S.SQLExp
@@ -96,16 +97,16 @@ convObj prepFn defInsVals setInsVals fieldInfoMap insObj = do
 
     throwNotInsErr c = do
       role <- userRole <$> askUserInfo
-      throw400 NotSupported $ "column " <> c <<> " is not insertable"
+      throw400 (_NotSupported # ()) $ "column " <> c <<> " is not insertable"
         <> " for role " <>> role
 
-validateInpCols :: (MonadError QErr m) => [PGCol] -> [PGCol] -> m ()
+validateInpCols :: (MonadError (QErr code) m, AsCodeHasura code) => [PGCol] -> [PGCol] -> m ()
 validateInpCols inpCols updColsPerm = forM_ inpCols $ \inpCol ->
-  unless (inpCol `elem` updColsPerm) $ throw400 ValidationFailed $
+  unless (inpCol `elem` updColsPerm) $ throw400 (_ValidationFailed # ()) $
     "column " <> inpCol <<> " is not updatable"
 
 buildConflictClause
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => SessVarBldr m
   -> TableInfo
   -> [PGCol]
@@ -120,7 +121,7 @@ buildConflictClause sessVarBldr tableInfo inpCols (OnConflict mTCol mTCons act) 
     (Nothing, Just cons, CAIgnore)  -> do
       validateConstraint cons
       return $ CP1DoNothing $ Just $ CTConstraint cons
-    (Nothing, Nothing, CAUpdate)    -> throw400 UnexpectedPayload
+    (Nothing, Nothing, CAUpdate)    -> throw400 (_UnexpectedPayload # ())
       "Expecting 'constraint' or 'constraint_on' when the 'action' is 'update'"
     (Just col, Nothing, CAUpdate)   -> do
       validateCols col
@@ -136,7 +137,7 @@ buildConflictClause sessVarBldr tableInfo inpCols (OnConflict mTCol mTCons act) 
       resolvedPreSet <- mapM (convPartialSQLExp sessVarBldr) preSet
       return $ CP1Update (CTConstraint cons) inpCols resolvedPreSet $
         toSQLBool resolvedUpdFltr
-    (Just _, Just _, _)             -> throw400 UnexpectedPayload
+    (Just _, Just _, _)             -> throw400 (_UnexpectedPayload # ())
       "'constraint' and 'constraint_on' cannot be set at a time"
   where
     coreInfo = _tiCoreInfo tableInfo
@@ -152,7 +153,7 @@ buildConflictClause sessVarBldr tableInfo inpCols (OnConflict mTCol mTCons act) 
       let tableConsNames = _cName <$> tciUniqueOrPrimaryKeyConstraints coreInfo
       withPathK "constraint" $
        unless (c `elem` tableConsNames) $
-       throw400 Unexpected $ "constraint " <> getConstraintTxt c
+       throw400 (_Unexpected # ()) $ "constraint " <> getConstraintTxt c
                    <<> " for table " <> _tciName coreInfo
                    <<> " does not exist"
 
@@ -166,7 +167,7 @@ buildConflictClause sessVarBldr tableInfo inpCols (OnConflict mTCol mTCons act) 
 
 
 convInsertQuery
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => (Value -> m [InsObj])
   -> SessVarBldr m
   -> (PGColumnType -> Value -> m S.SQLExp)
@@ -221,7 +222,7 @@ convInsertQuery objsParser sessVarBldr prepFn (InsertQuery tableName val oC mRet
 
   conflictClause <- withPathK "on_conflict" $ forM oC $ \c -> do
       roleName <- askCurRole
-      unless (isTabUpdatable roleName tableInfo) $ throw400 PermissionDenied $
+      unless (isTabUpdatable roleName tableInfo) $ throw400 (_PermissionDenied # ()) $
         "upsert is not allowed for role " <> roleName
         <<> " since update permissions are not defined"
 
@@ -233,14 +234,14 @@ convInsertQuery objsParser sessVarBldr prepFn (InsertQuery tableName val oC mRet
       "; \"returning\" can only be used if the role has "
       <> "\"select\" permission on the table"
 
-decodeInsObjs :: (UserInfoM m, QErrM m) => Value -> m [InsObj]
+decodeInsObjs :: (UserInfoM m, QErrM m code, AsCodeHasura code) => Value -> m [InsObj]
 decodeInsObjs v = do
   objs <- decodeValue v
-  when (null objs) $ throw400 UnexpectedPayload "objects should not be empty"
+  when (null objs) $ throw400 (_UnexpectedPayload # ()) "objects should not be empty"
   return objs
 
 convInsQ
-  :: (QErrM m, UserInfoM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m)
   => InsertQuery
   -> m (InsertQueryP1, DS.Seq Q.PrepArg)
 convInsQ =
@@ -249,7 +250,7 @@ convInsQ =
   sessVarFromCurrentSetting
   binRHSBuilder
 
-insertP2 :: Bool -> (InsertQueryP1, DS.Seq Q.PrepArg) -> Q.TxE QErr EncJSON
+insertP2 :: AsCodeHasura code => Bool -> (InsertQueryP1, DS.Seq Q.PrepArg) -> Q.TxE (QErr code) EncJSON
 insertP2 strfyNum (u, p) =
   runMutation
      $ Mutation (iqp1Table u) (insertCTE, p)
@@ -331,7 +332,7 @@ insertOrUpdateCheckExpr _ _ insCheck _ =
   insertCheckExpr "insert check constraint failed" insCheck
 
 runInsert
-  :: (QErrM m, UserInfoM m, CacheRM m, MonadTx m, HasSQLGenCtx m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m, MonadTx code m, HasSQLGenCtx m)
   => InsertQuery
   -> m EncJSON
 runInsert q = do

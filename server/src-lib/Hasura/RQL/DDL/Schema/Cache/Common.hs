@@ -73,8 +73,8 @@ data RebuildableSchemaCache m
   }
 $(makeLenses ''RebuildableSchemaCache)
 
-type CacheBuildM = ReaderT BuildReason Run
-type CacheBuildA = WriterA (Seq CollectedInfo) (Inc.Rule CacheBuildM)
+type CacheBuildM code = ReaderT BuildReason (Run code)
+type CacheBuildA code = WriterA (Seq CollectedInfo) (Inc.Rule (CacheBuildM code))
 
 bindErrorA
   :: (ArrowChoice arr, ArrowKleisli m arr, ArrowError e arr, MonadError e m)

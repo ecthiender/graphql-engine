@@ -150,7 +150,7 @@ getTableDiff oldtm newtm =
                       overloadedComputedFieldFunctions
 
 getTableChangeDeps
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, CacheRM m)
   => QualifiedTable -> TableDiff -> m [SchemaObjId]
 getTableChangeDeps tn tableDiff = do
   sc <- askSchemaCache
@@ -183,7 +183,7 @@ getSchemaDiff oldMeta newMeta =
       (tmTable oldtm, getTableDiff oldtm newtm)
 
 getSchemaChangeDeps
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, CacheRM m)
   => SchemaDiff -> m [SchemaObjId]
 getSchemaChangeDeps schemaDiff = do
   -- Get schema cache

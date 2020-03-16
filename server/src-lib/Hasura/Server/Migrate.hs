@@ -47,7 +47,7 @@ import           Hasura.Server.Version         (HasVersion)
 import           Hasura.SQL.Types
 import           System.Directory              (doesFileExist)
 
-dropCatalog :: (MonadTx m) => m ()
+dropCatalog :: (MonadTx code m) => m ()
 dropCatalog = liftTx $ Q.catchE defaultTxErrorHandler $ do
   -- This is where the generated views and triggers are stored
   Q.unitQ "DROP SCHEMA IF EXISTS hdb_views CASCADE" () False
@@ -86,7 +86,7 @@ migrateCatalog
   :: forall m
    . ( HasVersion
      , MonadIO m
-     , MonadTx m
+     , MonadTx code m
      , MonadUnique m
      , HasHttpManager m
      , HasSQLGenCtx m
@@ -186,7 +186,7 @@ migrateCatalog migrationTime = do
           WHERE name = $1
         ) |] (Identity schemaName) False
 
-downgradeCatalog :: forall m. (MonadIO m, MonadTx m) => DowngradeOptions -> UTCTime -> m MigrationResult
+downgradeCatalog :: forall m. (MonadIO m, MonadTx code m) => DowngradeOptions -> UTCTime -> m MigrationResult
 downgradeCatalog opts time = do
     downgradeFrom =<< getCatalogVersion
   where
@@ -243,18 +243,18 @@ downgradeCatalog opts time = do
 
 -- | The old 0.8 catalog version is non-integral, so we store it in the database as a
 -- string.
-getCatalogVersion :: MonadTx m => m Text
+getCatalogVersion :: MonadTx code m => m Text
 getCatalogVersion = liftTx $ runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler
   [Q.sql| SELECT version FROM hdb_catalog.hdb_version |] () False
 
-setCatalogVersion :: MonadTx m => Text -> UTCTime -> m ()
+setCatalogVersion :: MonadTx code m => Text -> UTCTime -> m ()
 setCatalogVersion ver time = liftTx $ Q.unitQE defaultTxErrorHandler [Q.sql|
     INSERT INTO hdb_catalog.hdb_version (version, upgraded_on) VALUES ($1, $2)
     ON CONFLICT ((version IS NOT NULL))
     DO UPDATE SET version = $1, upgraded_on = $2
   |] (ver, time) False
 
-migrations :: forall m. (MonadIO m, MonadTx m) => Bool -> [(T.Text, MigrationPair m)]
+migrations :: forall m. (MonadIO m, MonadTx code m) => Bool -> [(T.Text, MigrationPair m)]
 migrations dryRun =
     -- We need to build the list of migrations at compile-time so that we can compile the SQL
     -- directly into the executable using `Q.sqlFromFile`. The GHC stage restriction makes
@@ -343,7 +343,7 @@ migrations dryRun =
 -- it means our internal migrations are “blessed” compared to user-defined CLI migrations. If we
 -- improve CLI migrations further in the future, maybe we can switch back to using that approach,
 -- instead.
-recreateSystemMetadata :: (MonadTx m, CacheRWM m) => m ()
+recreateSystemMetadata :: (MonadTx code m, CacheRWM m) => m ()
 recreateSystemMetadata = do
   runTx $(Q.sqlFromFile "src-rsr/clear_system_metadata.sql")
   runHasSystemDefinedT (SystemDefined True) $ for_ systemMetadata \(tableName, tableRels) -> do
@@ -429,5 +429,5 @@ recreateSystemMetadata = do
     manualConfig schemaName tableName columns =
       RUManual $ RelManualConfig (QualifiedObject schemaName tableName) (HM.fromList columns)
 
-runTx :: (MonadTx m) => Q.Query -> m ()
+runTx :: (MonadTx code m) => Q.Query -> m ()
 runTx = liftTx . Q.multiQE defaultTxErrorHandler

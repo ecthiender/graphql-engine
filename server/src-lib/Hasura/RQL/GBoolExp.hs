@@ -10,7 +10,7 @@ import           Hasura.SQL.Types
 
 import qualified Hasura.SQL.DML      as S
 
-import           Control.Lens        (filtered, has)
+import           Control.Lens        (filtered, has, ( # ))
 import           Data.Aeson
 import           Data.Data.Lens      (template)
 
@@ -39,8 +39,8 @@ instance DQuote ColumnReference where
       dquoteTxt reference <> "::" <> dquoteTxt targetType
 
 parseOperationsExpression
-  :: forall m v
-   . (MonadError QErr m)
+  :: forall m v code
+   . (MonadError (QErr code) m, AsCodeHasura code)
   => OpRhsParser m v
   -> FieldInfoMap FieldInfo
   -> PGColumnInfo
@@ -161,7 +161,7 @@ parseOperationsExpression rhsParser fim columnInfo =
         "$clte"          -> parseClte
         "_clte"          -> parseClte
 
-        x                -> throw400 UnexpectedPayload $ "Unknown operator : " <> x
+        x                -> throw400 (_UnexpectedPayload # ()) $ "Unknown operator : " <> x
       where
         colTy = columnReferenceType column
 
@@ -205,7 +205,7 @@ parseOperationsExpression rhsParser fim columnInfo =
         checkValidCast targetType = case (colTy, targetType) of
           (PGColumnScalar PGGeometry, PGGeography) -> return ()
           (PGColumnScalar PGGeography, PGGeometry) -> return ()
-          _ -> throw400 UnexpectedPayload $
+          _ -> throw400 (_UnexpectedPayload # ()) $
             "cannot cast column of type " <> colTy <<> " to type " <>> targetType
 
         parseGeometryOp f =
@@ -234,7 +234,7 @@ parseOperationsExpression rhsParser fim columnInfo =
           let errMsg = "column operators can only compare postgres columns"
           rhsType <- askPGType fim rhsCol errMsg
           if colTy /= rhsType
-            then throw400 UnexpectedPayload $
+            then throw400 (_UnexpectedPayload # ()) $
                  "incompatible column types : " <> column <<> ", " <>> rhsCol
             else return rhsCol
 
@@ -248,7 +248,7 @@ parseOperationsExpression rhsParser fim columnInfo =
 
         guardType validTys = unless (isScalarColumnWhere (`elem` validTys) colTy) $
           throwError $ buildMsg colTy validTys
-        buildMsg ty expTys = err400 UnexpectedPayload
+        buildMsg ty expTys = err400 (_UnexpectedPayload # ())
           $ " is of type " <> ty <<> "; this operator works only on columns of type "
           <> T.intercalate "/" (map dquote expTys)
 
@@ -272,7 +272,7 @@ notEqualsBoolExpBuilder qualColExp rhsExp =
       (S.BENull rhsExp))
 
 annBoolExp
-  :: (QErrM m, TableCoreInfoRM m)
+  :: (QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
   => OpRhsParser m v
   -> FieldInfoMap FieldInfo
   -> GBoolExp ColExp
@@ -293,7 +293,7 @@ annBoolExp rhsParser fim boolExp =
     procExps = mapM (annBoolExp rhsParser fim)
 
 annColExp
-  :: (QErrM m, TableCoreInfoRM m)
+  :: (QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
   => OpRhsParser m v
   -> FieldInfoMap FieldInfo
   -> ColExp
@@ -302,7 +302,7 @@ annColExp rhsParser colInfoMap (ColExp fieldName colVal) = do
   colInfo <- askFieldInfo colInfoMap fieldName
   case colInfo of
     FIColumn (PGColumnInfo _ _ _ (PGColumnScalar PGJSON) _ _) ->
-      throwError (err400 UnexpectedPayload "JSON column can not be part of where clause")
+      throwError (err400 (_UnexpectedPayload # ()) "JSON column can not be part of where clause")
     FIColumn pgi ->
       AVCol pgi <$> parseOperationsExpression rhsParser colInfoMap pgi colVal
     FIRelationship relInfo -> do
@@ -312,7 +312,7 @@ annColExp rhsParser colInfoMap (ColExp fieldName colVal) = do
                          unBoolExp relBoolExp
       return $ AVRel relInfo annRelBoolExp
     FIComputedField _ ->
-      throw400 UnexpectedPayload "Computed columns can not be part of the where clause"
+      throw400 (_UnexpectedPayload # ()) "Computed columns can not be part of the where clause"
 
 toSQLBoolExp
   :: S.Qual -> AnnBoolExpSQL -> S.BoolExp

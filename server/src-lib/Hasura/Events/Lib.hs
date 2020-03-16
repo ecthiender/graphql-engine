@@ -7,10 +7,11 @@ module Hasura.Events.Lib
   , Event(..)
   ) where
 
-import           Control.Concurrent.Extended   (sleep)
 import           Control.Concurrent.Async      (async, waitAny)
+import           Control.Concurrent.Extended   (sleep)
 import           Control.Concurrent.STM.TVar
 import           Control.Exception             (try)
+import           Control.Lens                  (( # ))
 import           Control.Monad.STM             (STM, atomically, retry)
 import           Data.Aeson
 import           Data.Aeson.Casing
@@ -48,11 +49,11 @@ invocationVersion = "2"
 
 type LogEnvHeaders = Bool
 
-newtype EventInternalErr
-  = EventInternalErr QErr
+newtype EventInternalErr code
+  = EventInternalErr (QErr code)
   deriving (Show, Eq)
 
-instance L.ToEngineLog EventInternalErr L.Hasura where
+instance Show code => L.ToEngineLog (EventInternalErr code) L.Hasura where
   toEngineLog (EventInternalErr qerr) = (L.LevelError, L.eventTriggerLogType, toJSON qerr)
 
 data TriggerMeta
@@ -146,10 +147,10 @@ data Invocation
 
 data EventEngineCtx
   = EventEngineCtx
-  { _eeCtxEventQueue            :: TQ.TQueue Event
-  , _eeCtxEventThreads          :: TVar Int
-  , _eeCtxMaxEventThreads       :: Int
-  , _eeCtxFetchInterval         :: DiffTime
+  { _eeCtxEventQueue      :: TQ.TQueue Event
+  , _eeCtxEventThreads    :: TVar Int
+  , _eeCtxMaxEventThreads :: Int
+  , _eeCtxFetchInterval   :: DiffTime
   }
 
 defaultMaxEventThreads :: Int
@@ -181,7 +182,7 @@ pushEvents
   :: L.Logger L.Hasura -> Q.PGPool -> EventEngineCtx -> IO ()
 pushEvents logger pool eectx  = forever $ do
   let EventEngineCtx q _ _ fetchI = eectx
-  eventsOrError <- runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) fetchEvents
+  eventsOrError :: Either (QErr CodeHasura) [Event] <- runExceptT $ Q.runTx pool (Q.RepeatableRead, Just Q.ReadWrite) fetchEvents
   case eventsOrError of
     Left err     -> L.unLogger logger $ EventInternalErr err
     Right events -> atomically $ mapM_ (TQ.writeTQueue q) events
@@ -197,12 +198,15 @@ consumeEvents logger logenv httpMgr pool getSchemaCache eectx  = forever $ do
   async $ runReaderT (processEvent logenv pool getSchemaCache event) (logger, httpMgr, eectx)
 
 processEvent
-  :: ( HasVersion
+  :: forall code r m.
+     ( HasVersion
      , MonadReader r m
      , Has HTTP.Manager r
      , Has (L.Logger L.Hasura) r
      , Has EventEngineCtx r
      , MonadIO m
+     , AsCodeHasura code
+     , Show code
      )
   => LogEnvHeaders -> Q.PGPool -> IO SchemaCache -> Event -> m ()
 processEvent logenv pool getSchemaCache e = do
@@ -210,7 +214,7 @@ processEvent logenv pool getSchemaCache e = do
   let meti = getEventTriggerInfoFromEvent cache e
   case meti of
     Nothing -> do
-      logQErr $ err500 Unexpected "table or event-trigger not found in schema cache"
+      logQErr $ err500 (_Unexpected # ()) "table or event-trigger not found in schema cache"
     Just eti -> do
       let webhook = T.unpack $ wciCachedValue $ etiWebhookInfo eti
           retryConf = etiRetryConf eti
@@ -243,7 +247,7 @@ createEventPayload retryConf e = EventPayload
 processSuccess
   :: ( MonadIO m )
   => Q.PGPool -> Event -> [HeaderConf] -> EventPayload -> HTTPResp
-  -> m (Either QErr ())
+  -> m (Either (QErr code) ())
 processSuccess pool e decodedHeaders ep resp = do
   let respBody = hrsBody resp
       respHeaders = hrsHeaders resp
@@ -257,9 +261,10 @@ processError
   :: ( MonadIO m
      , MonadReader r m
      , Has (L.Logger L.Hasura) r
+     , AsCodeHasura code
      )
   => Q.PGPool -> Event -> RetryConf -> [HeaderConf] -> EventPayload -> HTTPErr
-  -> m (Either QErr ())
+  -> m (Either (QErr code) ())
 processError pool e retryConf decodedHeaders ep err = do
   logHTTPErr err
   let invocation = case err of
@@ -281,7 +286,7 @@ processError pool e retryConf decodedHeaders ep err = do
     insertInvocation invocation
     retryOrSetError e retryConf err
 
-retryOrSetError :: Event -> RetryConf -> HTTPErr -> Q.TxE QErr ()
+retryOrSetError :: AsCodeHasura code => Event -> RetryConf -> HTTPErr -> Q.TxE (QErr code) ()
 retryOrSetError e retryConf err = do
   let mretryHeader = getRetryAfterHeaderFromError err
       tries = eTries e
@@ -368,7 +373,7 @@ mkMaybe :: [a] -> Maybe [a]
 mkMaybe [] = Nothing
 mkMaybe x  = Just x
 
-logQErr :: ( MonadReader r m, Has (L.Logger L.Hasura) r, MonadIO m) => QErr -> m ()
+logQErr :: (MonadReader r m, Has (L.Logger L.Hasura) r, MonadIO m, Show code) => (QErr code) -> m ()
 logQErr err = do
   logger :: L.Logger L.Hasura <- asks getter
   L.unLogger logger $ EventInternalErr err
@@ -429,7 +434,7 @@ getEventTriggerInfoFromEvent sc e = let table = eTable e
                                         tableInfo = M.lookup table $ scTables sc
                                     in M.lookup ( tmName $ eTrigger e) =<< (_tiEventTriggerInfoMap <$> tableInfo)
 
-fetchEvents :: Q.TxE QErr [Event]
+fetchEvents :: (AsCodeHasura code) => Q.TxE (QErr code) [Event]
 fetchEvents =
   map uncurryEvent <$> Q.listQE defaultTxErrorHandler [Q.sql|
       UPDATE hdb_catalog.event_log
@@ -453,7 +458,7 @@ fetchEvents =
           , eCreatedAt = created
           }
 
-insertInvocation :: Invocation -> Q.TxE QErr ()
+insertInvocation :: AsCodeHasura code => Invocation -> Q.TxE (QErr code) ()
 insertInvocation invo = do
   Q.unitQE defaultTxErrorHandler [Q.sql|
           INSERT INTO hdb_catalog.event_invocation_logs (event_id, status, request, response)
@@ -468,21 +473,21 @@ insertInvocation invo = do
           WHERE id = $1
           |] (Identity $ iEventId invo) True
 
-setSuccess :: Event -> Q.TxE QErr ()
+setSuccess :: AsCodeHasura code => Event -> Q.TxE (QErr code) ()
 setSuccess e = Q.unitQE defaultTxErrorHandler [Q.sql|
                         UPDATE hdb_catalog.event_log
                         SET delivered = 't', next_retry_at = NULL, locked = 'f'
                         WHERE id = $1
                         |] (Identity $ eId e) True
 
-setError :: Event -> Q.TxE QErr ()
+setError :: AsCodeHasura code => Event -> Q.TxE (QErr code) ()
 setError e = Q.unitQE defaultTxErrorHandler [Q.sql|
                         UPDATE hdb_catalog.event_log
                         SET error = 't', next_retry_at = NULL, locked = 'f'
                         WHERE id = $1
                         |] (Identity $ eId e) True
 
-setRetry :: Event -> UTCTime -> Q.TxE QErr ()
+setRetry :: AsCodeHasura code => Event -> UTCTime -> Q.TxE (QErr code) ()
 setRetry e time =
   Q.unitQE defaultTxErrorHandler [Q.sql|
           UPDATE hdb_catalog.event_log
@@ -490,7 +495,7 @@ setRetry e time =
           WHERE id = $2
           |] (time, eId e) True
 
-unlockAllEvents :: Q.TxE QErr ()
+unlockAllEvents :: AsCodeHasura code => Q.TxE (QErr code) ()
 unlockAllEvents =
   Q.unitQE defaultTxErrorHandler [Q.sql|
           UPDATE hdb_catalog.event_log

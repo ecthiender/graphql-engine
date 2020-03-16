@@ -23,6 +23,8 @@ module Hasura.RQL.DDL.Action
   , deleteActionPermissionFromCatalog
   ) where
 
+import           Control.Lens                  (( # ))
+
 import           Hasura.EncJSON
 import           Hasura.GraphQL.Context        (defaultTypes)
 import           Hasura.GraphQL.Utils
@@ -44,24 +46,24 @@ import           Data.URL.Template             (renderURLTemplate)
 import           Language.Haskell.TH.Syntax    (Lift)
 
 getActionInfo
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => ActionName -> m ActionInfo
 getActionInfo actionName = do
   actionMap <- scActions <$> askSchemaCache
   case Map.lookup actionName actionMap of
     Just actionInfo -> return actionInfo
     Nothing         ->
-      throw400 NotExists $
+      throw400 (_NotExists # ()) $
       "action with name " <> actionName <<> " does not exist"
 
 runCreateAction
-  :: (QErrM m , CacheRWM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, CacheRWM m, MonadTx code m)
   => CreateAction -> m EncJSON
 runCreateAction createAction = do
   -- check if action with same name exists already
   actionMap <- scActions <$> askSchemaCache
   void $ onJust (Map.lookup actionName actionMap) $ const $
-    throw400 AlreadyExists $
+    throw400 (_AlreadyExists # ()) $
       "action with name " <> actionName <<> " already exists"
   persistCreateAction createAction
   buildSchemaCacheFor $ MOAction actionName
@@ -69,7 +71,7 @@ runCreateAction createAction = do
   where
     actionName = _caName createAction
 
-persistCreateAction :: (MonadTx m) =>  CreateAction -> m ()
+persistCreateAction :: (MonadTx code m, AsCodeHasura code) =>  CreateAction -> m ()
 persistCreateAction (CreateAction actionName actionDefinition comment) = do
   liftTx $ Q.unitQE defaultTxErrorHandler [Q.sql|
     INSERT into hdb_catalog.hdb_action
@@ -78,7 +80,7 @@ persistCreateAction (CreateAction actionName actionDefinition comment) = do
   |] (actionName, Q.AltJ actionDefinition, comment) True
 
 resolveAction
-  :: (QErrM m, MonadIO m)
+  :: (QErrM m code, AsCodeHasura code, MonadIO m)
   => (NonObjectTypeMap, AnnotatedObjects)
   -> ActionDefinitionInput
   -> m ResolvedActionDefinition
@@ -92,7 +94,7 @@ resolveAction customTypes actionDefinition = do
       VT.TIScalar _ -> return ()
       VT.TIEnum _   -> return ()
       VT.TIInpObj _ -> return ()
-      _ -> throw400 InvalidParams $ "the argument's base type: "
+      _ -> throw400 (_InvalidParams # ()) $ "the argument's base type: "
           <> showNamedTy argumentBaseType <>
           " should be a scalar/enum/input_object"
   -- Check if the response type is an object
@@ -103,27 +105,27 @@ resolveAction customTypes actionDefinition = do
       let nonObjectTypeMap = unNonObjectTypeMap $ fst $ customTypes
           inputTypeInfos = nonObjectTypeMap <> mapFromL VT.getNamedTy defaultTypes
       onNothing (Map.lookup typeName inputTypeInfos) $
-        throw400 NotExists $ "the type: " <> showNamedTy typeName <>
+        throw400 (_NotExists # ()) $ "the type: " <> showNamedTy typeName <>
         " is not defined in custom types"
 
     resolveWebhook (InputWebhook urlTemplate) = do
       eitherRenderedTemplate <- renderURLTemplate urlTemplate
-      either (throw400 Unexpected . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
+      either (throw400 (_Unexpected # ()) . T.pack) (pure . ResolvedWebhook) eitherRenderedTemplate
 
     getObjectTypeInfo typeName =
       onNothing (Map.lookup (ObjectTypeName typeName) (snd customTypes)) $
-        throw400 NotExists $ "the type: "
+        throw400 (_NotExists # ()) $ "the type: "
         <> showNamedTy typeName <>
         " is not an object type defined in custom types"
 
 runUpdateAction
-  :: forall m. ( QErrM m , CacheRWM m, MonadTx m)
+  :: forall m code. (QErrM m code, AsCodeHasura code, CacheRWM m, MonadTx code m)
   => UpdateAction -> m EncJSON
 runUpdateAction (UpdateAction actionName actionDefinition) = do
   sc <- askSchemaCache
   let actionsMap = scActions sc
   void $ onNothing (Map.lookup actionName actionsMap) $
-    throw400 NotExists $ "action with name " <> actionName <<> " not exists"
+    throw400 (_NotExists # ()) $ "action with name " <> actionName <<> " not exists"
   updateActionInCatalog
   buildSchemaCacheFor $ MOAction actionName
   pure successMsg
@@ -154,7 +156,7 @@ data DropAction
 $(J.deriveJSON (J.aesonDrop 3 J.snakeCase) ''DropAction)
 
 runDropAction
-  :: (QErrM m, CacheRWM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, CacheRWM m, MonadTx code m)
   => DropAction -> m EncJSON
 runDropAction (DropAction actionName clearDataM)= do
   void $ getActionInfo actionName
@@ -171,9 +173,10 @@ runDropAction (DropAction actionName clearDataM)= do
           |] (Identity actionName) True
 
 deleteActionFromCatalog
-  :: ActionName
+  :: AsCodeHasura code
+  => ActionName
   -> Maybe ClearActionData
-  -> Q.TxE QErr ()
+  -> Q.TxE (QErr code) ()
 deleteActionFromCatalog actionName clearDataM = do
   Q.unitQE defaultTxErrorHandler [Q.sql|
       DELETE FROM hdb_catalog.hdb_action
@@ -186,14 +189,14 @@ deleteActionFromCatalog actionName clearDataM = do
     -- the data needs to be retained
     clearData = fromMaybe defaultClearActionData clearDataM
 
-clearActionDataFromCatalog :: ActionName -> Q.TxE QErr ()
+clearActionDataFromCatalog :: AsCodeHasura code => ActionName -> Q.TxE (QErr code) ()
 clearActionDataFromCatalog actionName =
   Q.unitQE defaultTxErrorHandler [Q.sql|
       DELETE FROM hdb_catalog.hdb_action_log
         WHERE action_name = $1
       |] (Identity actionName) True
 
-fetchActions :: Q.TxE QErr [CreateAction]
+fetchActions :: AsCodeHasura code => Q.TxE (QErr code) [CreateAction]
 fetchActions =
   map fromRow <$> Q.listQE defaultTxErrorHandler
     [Q.sql|
@@ -210,12 +213,12 @@ newtype ActionMetadataField
   deriving (Show, Eq, J.FromJSON, J.ToJSON)
 
 runCreateActionPermission
-  :: (QErrM m , CacheRWM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, CacheRWM m, MonadTx code m)
   => CreateActionPermission -> m EncJSON
 runCreateActionPermission createActionPermission = do
   actionInfo <- getActionInfo actionName
   void $ onJust (Map.lookup role $ _aiPermissions actionInfo) $ const $
-    throw400 AlreadyExists $ "permission for role: " <> role
+    throw400 (_AlreadyExists # ()) $ "permission for role: " <> role
     <<> "is already defined on " <>> actionName
   persistCreateActionPermission createActionPermission
   buildSchemaCacheFor $ MOActionPermission actionName role
@@ -224,7 +227,7 @@ runCreateActionPermission createActionPermission = do
     actionName = _capAction createActionPermission
     role = _capRole createActionPermission
 
-persistCreateActionPermission :: (MonadTx m) => CreateActionPermission -> m ()
+persistCreateActionPermission :: (MonadTx code m, AsCodeHasura code) => CreateActionPermission -> m ()
 persistCreateActionPermission CreateActionPermission{..}= do
   liftTx $ Q.unitQE defaultTxErrorHandler [Q.sql|
     INSERT into hdb_catalog.hdb_action_permission
@@ -240,12 +243,12 @@ data DropActionPermission
 $(J.deriveJSON (J.aesonDrop 4 J.snakeCase) ''DropActionPermission)
 
 runDropActionPermission
-  :: (QErrM m, CacheRWM m, MonadTx m)
+  :: (QErrM m code, AsCodeHasura code, CacheRWM m, MonadTx code m)
   => DropActionPermission -> m EncJSON
 runDropActionPermission dropActionPermission = do
   actionInfo <- getActionInfo actionName
   void $ onNothing (Map.lookup role $ _aiPermissions actionInfo) $
-    throw400 NotExists $
+    throw400 (_NotExists # ()) $
     "permission for role: " <> role <<> " is not defined on " <>> actionName
   liftTx $ deleteActionPermissionFromCatalog actionName role
   return successMsg
@@ -253,7 +256,7 @@ runDropActionPermission dropActionPermission = do
     actionName = _dapAction dropActionPermission
     role = _dapRole dropActionPermission
 
-deleteActionPermissionFromCatalog :: ActionName -> RoleName -> Q.TxE QErr ()
+deleteActionPermissionFromCatalog :: AsCodeHasura code => ActionName -> RoleName -> Q.TxE (QErr code) ()
 deleteActionPermissionFromCatalog actionName role =
   Q.unitQE defaultTxErrorHandler [Q.sql|
       DELETE FROM hdb_catalog.hdb_action_permission

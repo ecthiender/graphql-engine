@@ -14,9 +14,10 @@ module Hasura.RQL.DDL.QueryCollection
   , module Hasura.RQL.Types.QueryCollection
   ) where
 
+import           Control.Lens                     (( # ))
+
 import           Hasura.EncJSON
 import           Hasura.Prelude
-
 import           Hasura.RQL.Types
 import           Hasura.RQL.Types.QueryCollection
 import           Hasura.Server.Utils              (duplicates)
@@ -27,23 +28,23 @@ import qualified Data.Text.Extended               as T
 import qualified Database.PG.Query                as Q
 
 addCollectionP2
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => CollectionDef -> m ()
 addCollectionP2 (CollectionDef queryList) =
   withPathK "queries" $
-    unless (null duplicateNames) $ throw400 NotSupported $
+    unless (null duplicateNames) $ throw400 (_NotSupported # ()) $
       "found duplicate query names "
       <> T.intercalate ", " (map (T.dquote . unNonEmptyText . unQueryName) duplicateNames)
   where
     duplicateNames = duplicates $ map _lqName queryList
 
 runCreateCollection
-  :: (QErrM m, MonadTx m, HasSystemDefined m)
+  :: (QErrM m code, MonadTx code m, AsCodeHasura code, HasSystemDefined m)
   => CreateCollection -> m EncJSON
 runCreateCollection cc = do
   collDetM <- getCollectionDefM collName
   withPathK "name" $
-    onJust collDetM $ const $ throw400 AlreadyExists $
+    onJust collDetM $ const $ throw400 (_AlreadyExists # ()) $
       "query collection with name " <> collName <<> " already exists"
   withPathK "definition" $ addCollectionP2 def
   systemDefined <- askSystemDefined
@@ -53,13 +54,13 @@ runCreateCollection cc = do
     CreateCollection collName def _ = cc
 
 runAddQueryToCollection
-  :: (CacheRWM m, MonadTx m)
+  :: (CacheRWM m, MonadTx code m, AsCodeHasura code)
   => AddQueryToCollection -> m EncJSON
 runAddQueryToCollection (AddQueryToCollection collName queryName query) = do
   CollectionDef qList <- getCollectionDef collName
   let queryExists = flip any qList $ \q -> _lqName q == queryName
 
-  when queryExists $ throw400 AlreadyExists $ "query with name "
+  when queryExists $ throw400 (_AlreadyExists # ()) $ "query with name "
     <> queryName <<> " already exists in collection " <>> collName
 
   let collDef = CollectionDef $ qList <> pure listQ
@@ -70,7 +71,7 @@ runAddQueryToCollection (AddQueryToCollection collName queryName query) = do
     listQ = ListedQuery queryName query
 
 runDropCollection
-  :: (MonadTx m, CacheRWM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m)
   => DropCollection -> m EncJSON
 runDropCollection (DropCollection collName cascade) = do
   withPathK "collection" $ do
@@ -83,18 +84,18 @@ runDropCollection (DropCollection collName cascade) = do
         -- drop collection in allowlist
         liftTx $ delCollectionFromAllowlistCatalog collName
         withNewInconsistentObjsCheck buildSchemaCache
-      else throw400 DependencyError $ "query collection with name "
+      else throw400 (_DependencyError # ()) $ "query collection with name "
            <> collName <<> " is present in allowlist; cannot proceed to drop"
   liftTx $ delCollectionFromCatalog collName
   return successMsg
 
 runDropQueryFromCollection
-  :: (CacheRWM m, MonadTx m)
+  :: (CacheRWM m, MonadTx code m, AsCodeHasura code)
   => DropQueryFromCollection -> m EncJSON
 runDropQueryFromCollection (DropQueryFromCollection collName queryName) = do
   CollectionDef qList <- getCollectionDef collName
   let queryExists = flip any qList $ \q -> _lqName q == queryName
-  when (not queryExists) $ throw400 NotFound $ "query with name "
+  when (not queryExists) $ throw400 (_NotFound # ()) $ "query with name "
     <> queryName <<> " not found in collection " <>> collName
   let collDef = CollectionDef $ flip filter qList $
                                 \q -> _lqName q /= queryName
@@ -103,7 +104,7 @@ runDropQueryFromCollection (DropQueryFromCollection collName queryName) = do
   return successMsg
 
 runAddCollectionToAllowlist
-  :: (MonadTx m, CacheRWM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m)
   => CollectionReq -> m EncJSON
 runAddCollectionToAllowlist (CollectionReq collName) = do
   void $ withPathK "collection" $ getCollectionDef collName
@@ -112,7 +113,7 @@ runAddCollectionToAllowlist (CollectionReq collName) = do
   return successMsg
 
 runDropCollectionFromAllowlist
-  :: (UserInfoM m, MonadTx m, CacheRWM m)
+  :: (UserInfoM m, MonadTx code m, AsCodeHasura code, CacheRWM m)
   => CollectionReq -> m EncJSON
 runDropCollectionFromAllowlist (CollectionReq collName) = do
   void $ withPathK "collection" $ getCollectionDef collName
@@ -121,15 +122,15 @@ runDropCollectionFromAllowlist (CollectionReq collName) = do
   return successMsg
 
 getCollectionDef
-  :: (QErrM m, MonadTx m)
+  :: (QErrM m code, MonadTx code m, AsCodeHasura code)
   => CollectionName -> m CollectionDef
 getCollectionDef collName = do
   detM <- getCollectionDefM collName
-  onNothing detM $ throw400 NotExists $
+  onNothing detM $ throw400 (_NotExists # ()) $
     "query collection with name " <> collName <<> " does not exists"
 
 getCollectionDefM
-  :: (QErrM m, MonadTx m)
+  :: (QErrM m code, MonadTx code m, AsCodeHasura code)
   => CollectionName -> m (Maybe CollectionDef)
 getCollectionDefM collName = do
   allCollections <- liftTx fetchAllCollections
@@ -140,7 +141,7 @@ getCollectionDefM collName = do
     _   -> throw500 "more than one row returned for query collections"
 
 -- Database functions
-fetchAllCollections :: Q.TxE QErr [CreateCollection]
+fetchAllCollections :: AsCodeHasura code => Q.TxE (QErr code) [CreateCollection]
 fetchAllCollections = do
   r <- Q.listQE defaultTxErrorHandler [Q.sql|
            SELECT collection_name, collection_defn::json, comment
@@ -149,14 +150,14 @@ fetchAllCollections = do
   return $ flip map r $ \(name, Q.AltJ defn, mComment)
                         -> CreateCollection name defn mComment
 
-fetchAllowlist :: Q.TxE QErr [CollectionName]
+fetchAllowlist :: AsCodeHasura code => Q.TxE (QErr code) [CollectionName]
 fetchAllowlist = map runIdentity <$>
   Q.listQE defaultTxErrorHandler [Q.sql|
       SELECT collection_name
         FROM hdb_catalog.hdb_allowlist
      |] () True
 
-addCollectionToCatalog :: CreateCollection -> SystemDefined -> Q.TxE QErr ()
+addCollectionToCatalog :: AsCodeHasura code => CreateCollection -> SystemDefined -> Q.TxE (QErr code) ()
 addCollectionToCatalog (CreateCollection name defn mComment) systemDefined =
   Q.unitQE defaultTxErrorHandler [Q.sql|
     INSERT INTO hdb_catalog.hdb_query_collection
@@ -164,7 +165,7 @@ addCollectionToCatalog (CreateCollection name defn mComment) systemDefined =
     VALUES ($1, $2, $3, $4)
   |] (name, Q.AltJ defn, mComment, systemDefined) True
 
-delCollectionFromCatalog :: CollectionName -> Q.TxE QErr ()
+delCollectionFromCatalog :: AsCodeHasura code => CollectionName -> Q.TxE (QErr code) ()
 delCollectionFromCatalog name =
   Q.unitQE defaultTxErrorHandler [Q.sql|
      DELETE FROM hdb_catalog.hdb_query_collection
@@ -172,7 +173,7 @@ delCollectionFromCatalog name =
   |] (Identity name) True
 
 updateCollectionDefCatalog
-  :: CollectionName -> CollectionDef -> Q.TxE QErr ()
+  :: AsCodeHasura code => CollectionName -> CollectionDef -> Q.TxE (QErr code) ()
 updateCollectionDefCatalog collName def = do
   -- Update definition
   Q.unitQE defaultTxErrorHandler [Q.sql|
@@ -181,7 +182,7 @@ updateCollectionDefCatalog collName def = do
      WHERE collection_name = $2
   |] (Q.AltJ def, collName) True
 
-addCollectionToAllowlistCatalog :: CollectionName -> Q.TxE QErr ()
+addCollectionToAllowlistCatalog :: AsCodeHasura code => CollectionName -> Q.TxE (QErr code) ()
 addCollectionToAllowlistCatalog collName =
   Q.unitQE defaultTxErrorHandler [Q.sql|
       INSERT INTO hdb_catalog.hdb_allowlist
@@ -189,7 +190,7 @@ addCollectionToAllowlistCatalog collName =
             VALUES ($1)
       |] (Identity collName) True
 
-delCollectionFromAllowlistCatalog :: CollectionName -> Q.TxE QErr ()
+delCollectionFromAllowlistCatalog :: AsCodeHasura code => CollectionName -> Q.TxE (QErr code) ()
 delCollectionFromAllowlistCatalog collName =
   Q.unitQE defaultTxErrorHandler [Q.sql|
       DELETE FROM hdb_catalog.hdb_allowlist

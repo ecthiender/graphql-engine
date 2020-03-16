@@ -23,33 +23,35 @@ data RunCtx
   , _rcSqlGenCtx :: !SQLGenCtx
   }
 
-newtype Run a
-  = Run { unRun :: ReaderT RunCtx (LazyTx QErr) a }
+newtype Run code a
+  = Run { unRun :: ReaderT RunCtx (LazyTx (QErr code)) a }
   deriving ( Functor, Applicative, Monad
-           , MonadError QErr
+           , MonadError (QErr code)
            , MonadReader RunCtx
-           , MonadTx
+           -- , MonadTx code
            , MonadIO
            , MonadBase IO
            , MonadBaseControl IO
            , MonadUnique
            )
 
-instance UserInfoM Run where
+deriving instance MonadTx code (LazyTx (QErr code)) => MonadTx code (Run code)
+
+instance UserInfoM (Run code) where
   askUserInfo = asks _rcUserInfo
 
-instance HasHttpManager Run where
+instance HasHttpManager (Run code) where
   askHttpManager = asks _rcHttpMgr
 
-instance HasSQLGenCtx Run where
+instance HasSQLGenCtx (Run code) where
   askSQLGenCtx = asks _rcSqlGenCtx
 
 peelRun
-  :: (MonadIO m)
+  :: (MonadIO m, AsCodeHasura code)
   => RunCtx
   -> PGExecCtx
   -> Q.TxAccess
-  -> Run a
-  -> ExceptT QErr m a
+  -> Run code a
+  -> ExceptT (QErr code) m a
 peelRun runCtx@(RunCtx userInfo _ _) pgExecCtx txAccess (Run m) =
   runLazyTx pgExecCtx txAccess $ withUserInfo userInfo $ runReaderT m runCtx

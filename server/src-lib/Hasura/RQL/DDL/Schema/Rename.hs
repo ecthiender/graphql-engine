@@ -45,13 +45,13 @@ data Rename
   | RField !RenameField
   deriving (Show, Eq)
 
-otherDeps :: QErrM m => Text -> SchemaObjId -> m ()
+otherDeps :: (QErrM m code, AsCodeHasura code) => Text -> SchemaObjId -> m ()
 otherDeps errMsg d =
   throw500 $ "unexpected dependancy "
     <> reportSchemaObj d <> "; " <> errMsg
 
 renameTableInCatalog
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> QualifiedTable -> m ()
 renameTableInCatalog newQT oldQT = do
   sc <- askSchemaCache
@@ -79,7 +79,7 @@ renameTableInCatalog newQT oldQT = do
                 |] (nsn, ntn, osn, otn) False
 
 renameColInCatalog
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => PGCol -> PGCol -> QualifiedTable -> FieldInfoMap FieldInfo -> m ()
 renameColInCatalog oCol nCol qt fieldInfo = do
   sc <- askSchemaCache
@@ -104,13 +104,13 @@ renameColInCatalog oCol nCol qt fieldInfo = do
     assertFldNotExists =
       case M.lookup (fromPGCol oCol) fieldInfo of
         Just (FIRelationship _) ->
-          throw400 AlreadyExists $ "cannot rename column " <> oCol
+          throw400 (_AlreadyExists # ()) $ "cannot rename column " <> oCol
           <<> " to " <> nCol <<> " in table " <> qt <<>
           " as a relationship with the name already exists"
         _ -> return ()
 
 renameRelInCatalog
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> RelName -> RelName -> m ()
 renameRelInCatalog qt oldRN newRN = do
   sc <- askSchemaCache
@@ -137,7 +137,7 @@ renameRelInCatalog qt oldRN newRN = do
 
 -- update table names in relationship definition
 updateRelDefs
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> RelName ->  RenameTable -> m ()
 updateRelDefs qt rn renameTable = do
   fim <- askFieldInfoMap qt
@@ -148,7 +148,7 @@ updateRelDefs qt rn renameTable = do
 
 
 updateObjRelDef
-  :: (MonadTx m)
+  :: (MonadTx code m, AsCodeHasura code)
   => QualifiedTable -> RelName ->  RenameTable -> m ()
 updateObjRelDef qt rn (oldQT, newQT) = do
   oldDefV <- liftTx $ getRelDef qt rn
@@ -161,7 +161,7 @@ updateObjRelDef qt rn (oldQT, newQT) = do
   liftTx $ updateRel qt rn $ toJSON newDef
 
 updateArrRelDef
-  :: (MonadTx m)
+  :: (MonadTx code m, AsCodeHasura code)
   => QualifiedTable -> RelName ->  RenameTable -> m ()
 updateArrRelDef qt rn (oldQT, newQT) = do
   oldDefV <- liftTx $ getRelDef qt rn
@@ -178,7 +178,7 @@ updateArrRelDef qt rn (oldQT, newQT) = do
     getUpdQT dbQT = bool oldQT newQT $ oldQT == dbQT
 
 -- | update fields in premissions
-updatePermFlds :: (MonadTx m, CacheRM m)
+updatePermFlds :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> RoleName -> PermType -> Rename -> m ()
 updatePermFlds refQT rn pt rename = do
   pDef <- fmap fst $ liftTx $ fetchPermDef refQT rn pt
@@ -197,7 +197,7 @@ updatePermFlds refQT rn pt rename = do
       updateDelPermFlds refQT rename rn perm
 
 updateInsPermFlds
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> Rename -> RoleName -> InsPerm -> m ()
 updateInsPermFlds refQT rename rn (InsPerm chk preset cols) = do
   updatedPerm <- case rename of
@@ -212,7 +212,7 @@ updateInsPermFlds refQT rename rn (InsPerm chk preset cols) = do
   liftTx $ updatePermDefInCatalog PTInsert refQT rn updatedPerm
 
 updateSelPermFlds
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> Rename -> RoleName -> SelPerm -> m ()
 updateSelPermFlds refQT rename rn (SelPerm cols fltr limit aggAllwd computedFields) = do
   updatedPerm <- case rename of
@@ -226,7 +226,7 @@ updateSelPermFlds refQT rename rn (SelPerm cols fltr limit aggAllwd computedFiel
   liftTx $ updatePermDefInCatalog PTSelect refQT rn updatedPerm
 
 updateUpdPermFlds
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> Rename -> RoleName -> UpdPerm -> m ()
 updateUpdPermFlds refQT rename rn (UpdPerm cols preset fltr check) = do
   updatedPerm <- case rename of
@@ -243,7 +243,7 @@ updateUpdPermFlds refQT rename rn (UpdPerm cols preset fltr check) = do
   liftTx $ updatePermDefInCatalog PTUpdate refQT rn updatedPerm
 
 updateDelPermFlds
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> Rename -> RoleName -> DelPerm -> m ()
 updateDelPermFlds refQT rename rn (DelPerm fltr) = do
   updFltr <- case rename of
@@ -290,7 +290,7 @@ updateTableInBoolExp (oldQT, newQT) =
     if rqfQT == oldQT then newQT else rqfQT
 
 updateFieldInBoolExp
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> RenameField -> BoolExp -> m BoolExp
 updateFieldInBoolExp qt rf be = BoolExp <$>
   case unBoolExp be of
@@ -307,7 +307,7 @@ updateFieldInBoolExp qt rf be = BoolExp <$>
       fmap unBoolExp . updateFieldInBoolExp qt rf . BoolExp
 
 updateColExp
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> RenameField -> ColExp-> m ColExp
 updateColExp qt rf (ColExp fld val) =
   ColExp updatedFld <$> updatedVal
@@ -331,7 +331,7 @@ updateColExp qt rf (ColExp fld val) =
 
 -- rename columns in relationship definitions
 updateColInRel
-  :: (MonadTx m, CacheRM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRM m)
   => QualifiedTable -> RelName -> RenameCol -> m ()
 updateColInRel fromQT rn rnCol = do
   fim <- askFieldInfoMap fromQT
@@ -347,7 +347,7 @@ updateColInRel fromQT rn rnCol = do
 
 -- rename columns in relationship definitions
 updateColInEventTriggerDef
-  :: (MonadTx m)
+  :: (MonadTx code m, AsCodeHasura code)
   => TriggerName -> RenameCol -> m ()
 updateColInEventTriggerDef trigName rnCol = do
   (trigTab, trigDef) <- liftTx $ DS.getEventTriggerDef trigName
@@ -416,7 +416,7 @@ updateColMap fromQT toQT rnCol =
     modCol colQt col = if colQt == qt && col == oCol then nCol else col
 
 possiblyUpdateCustomColumnNames
-  :: MonadTx m => QualifiedTable -> PGCol -> PGCol -> m ()
+  :: (MonadTx code m, AsCodeHasura code) => QualifiedTable -> PGCol -> PGCol -> m ()
 possiblyUpdateCustomColumnNames qt oCol nCol = do
   TableConfig customRootFields customColumns <- getTableConfig qt
   let updatedCustomColumns =
@@ -426,7 +426,7 @@ possiblyUpdateCustomColumnNames qt oCol nCol = do
     updateTableConfig qt $ TableConfig customRootFields updatedCustomColumns
 
 -- database functions for relationships
-getRelDef :: QualifiedTable -> RelName -> Q.TxE QErr Value
+getRelDef :: AsCodeHasura code => QualifiedTable -> RelName -> Q.TxE (QErr code) Value
 getRelDef (QualifiedObject sn tn) rn =
   Q.getAltJ . runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler
     [Q.sql|
@@ -435,7 +435,7 @@ getRelDef (QualifiedObject sn tn) rn =
         AND rel_name = $3
     |] (sn, tn, rn) True
 
-updateRel :: QualifiedTable -> RelName -> Value -> Q.TxE QErr ()
+updateRel :: AsCodeHasura code => QualifiedTable -> RelName -> Value -> Q.TxE (QErr code) ()
 updateRel (QualifiedObject sn tn) rn relDef =
   Q.unitQE defaultTxErrorHandler [Q.sql|
            UPDATE hdb_catalog.hdb_relationship

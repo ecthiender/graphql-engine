@@ -37,7 +37,7 @@ newtype DbUid
   = DbUid { getDbUid :: Text }
   deriving (Show, Eq, J.ToJSON, J.FromJSON)
 
-getDbId :: Q.TxE QErr Text
+getDbId :: Q.TxE (QErr code) Text
 getDbId =
   (runIdentity . Q.getRow) <$>
   Q.withQE defaultTxErrorHandler
@@ -1085,17 +1085,17 @@ serveOptionsParser =
 -- | This implements the mapping between application versions
 -- and catalog schema versions.
 downgradeShortcuts :: [(String, String)]
-downgradeShortcuts = 
+downgradeShortcuts =
   $(do let s = $(embedStringFile "src-rsr/catalog_versions.txt")
-          
+
            parseVersions = map (parseVersion . words) . lines
-     
+
            parseVersion [tag, version] = (tag, version)
-           parseVersion other = error ("unrecognized tag/catalog mapping " ++ show other)
-       TH.lift (parseVersions s))     
+           parseVersion other          = error ("unrecognized tag/catalog mapping " ++ show other)
+       TH.lift (parseVersions s))
 
 downgradeOptionsParser :: Parser DowngradeOptions
-downgradeOptionsParser = 
+downgradeOptionsParser =
     DowngradeOptions
     <$> choice
         (strOption
@@ -1110,7 +1110,7 @@ downgradeOptionsParser =
           help "Don't run any migrations, just print out the SQL."
         )
   where
-    shortcut v catalogVersion = 
+    shortcut v catalogVersion =
       flag' (DataString.fromString catalogVersion)
         ( long ("to-" <> v) <>
           help ("Downgrade to graphql-engine version " <> v <> " (equivalent to --to-catalog-version " <> catalogVersion <> ")")

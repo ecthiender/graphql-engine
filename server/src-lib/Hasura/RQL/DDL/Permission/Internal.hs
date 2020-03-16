@@ -52,13 +52,13 @@ permissionIsDefined rpi pa =
   isJust $ join $ rpi ^? _Just.permAccToLens pa
 
 assertPermDefined
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => RoleName
   -> PermAccessor a
   -> TableInfo
   -> m ()
 assertPermDefined roleName pa tableInfo =
-  unless (permissionIsDefined rpi pa) $ throw400 PermissionDenied $ mconcat
+  unless (permissionIsDefined rpi pa) $ throw400 (_PermissionDenied # ()) $ mconcat
   [ "'" <> T.pack (show $ permAccToType pa) <> "'"
   , " permission on " <>> _tciName (_tiCoreInfo tableInfo)
   , " for role " <>> roleName
@@ -68,7 +68,7 @@ assertPermDefined roleName pa tableInfo =
     rpi = M.lookup roleName $ _tiRolePermInfoMap tableInfo
 
 askPermInfo
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => TableInfo
   -> RoleName
   -> PermAccessor c
@@ -76,7 +76,7 @@ askPermInfo
 askPermInfo tabInfo roleName pa =
   case M.lookup roleName rpim >>= (^. paL) of
     Just c  -> return c
-    Nothing -> throw400 PermissionDenied $ mconcat
+    Nothing -> throw400 (_PermissionDenied # ()) $ mconcat
                [ pt <> " permission on " <>> _tciName (_tiCoreInfo tabInfo)
                , " for role " <>> roleName
                , " does not exist"
@@ -87,12 +87,12 @@ askPermInfo tabInfo roleName pa =
     rpim = _tiRolePermInfoMap tabInfo
 
 savePermToCatalog
-  :: (ToJSON a)
+  :: (ToJSON a, AsCodeHasura code)
   => PermType
   -> QualifiedTable
   -> PermDef a
   -> SystemDefined
-  -> Q.TxE QErr ()
+  -> Q.TxE (QErr code) ()
 savePermToCatalog pt (QualifiedObject sn tn) (PermDef  rn qdef mComment) systemDefined =
   Q.unitQE defaultTxErrorHandler [Q.sql|
            INSERT INTO
@@ -102,12 +102,12 @@ savePermToCatalog pt (QualifiedObject sn tn) (PermDef  rn qdef mComment) systemD
                 |] (sn, tn, rn, permTypeToCode pt, Q.AltJ qdef, mComment, systemDefined) True
 
 updatePermDefInCatalog
-  :: (ToJSON a)
+  :: (ToJSON a, AsCodeHasura code)
   => PermType
   -> QualifiedTable
   -> RoleName
   -> a
-  -> Q.TxE QErr ()
+  -> Q.TxE (QErr code) ()
 updatePermDefInCatalog pt (QualifiedObject sn tn) rn qdef =
   Q.unitQE defaultTxErrorHandler [Q.sql|
            UPDATE hdb_catalog.hdb_permission
@@ -117,10 +117,11 @@ updatePermDefInCatalog pt (QualifiedObject sn tn) rn qdef =
            |] (Q.AltJ qdef, sn, tn, rn, permTypeToCode pt) True
 
 dropPermFromCatalog
-  :: QualifiedTable
+  :: AsCodeHasura code
+  => QualifiedTable
   -> RoleName
   -> PermType
-  -> Q.TxE QErr ()
+  -> Q.TxE (QErr code) ()
 dropPermFromCatalog (QualifiedObject sn tn) rn pt =
   Q.unitQE defaultTxErrorHandler [Q.sql|
            DELETE FROM
@@ -160,7 +161,7 @@ data CreatePermP1Res a
   } deriving (Show, Eq)
 
 procBoolExp
-  :: (QErrM m, TableCoreInfoRM m)
+  :: (QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
   => QualifiedTable
   -> FieldInfoMap FieldInfo
   -> BoolExp
@@ -192,7 +193,7 @@ getDependentHeaders (BoolExp boolExp) =
   flip foldMap boolExp $ \(ColExp _ v) -> getDepHeadersFromVal v
 
 valueParser
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => PGType PGColumnType -> Value -> m PartialSQLExp
 valueParser pgType = \case
   -- When it is a special variable
@@ -243,7 +244,7 @@ class (ToJSON a) => IsPerm a where
     :: PermAccessor (PermInfo a)
 
   buildPermInfo
-    :: (QErrM m, TableCoreInfoRM m)
+    :: (QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
     => QualifiedTable
     -> FieldInfoMap FieldInfo
     -> PermDef a
@@ -256,15 +257,21 @@ class (ToJSON a) => IsPerm a where
   getPermAcc2
     :: DropPerm a -> PermAccessor (PermInfo a)
   getPermAcc2 _ = permAccessor
-  
-addPermP2 :: (IsPerm a, MonadTx m, HasSystemDefined m) => QualifiedTable -> PermDef a -> m ()
+
+addPermP2
+  :: ( IsPerm a
+     , MonadTx code m
+     , AsCodeHasura code
+     , HasSystemDefined m
+     )
+  => QualifiedTable -> PermDef a -> m ()
 addPermP2 tn pd = do
   let pt = permAccToType $ getPermAcc1 pd
   systemDefined <- askSystemDefined
   liftTx $ savePermToCatalog pt tn pd systemDefined
 
 runCreatePerm
-  :: (UserInfoM m, CacheRWM m, IsPerm a, MonadTx m, HasSystemDefined m)
+  :: (UserInfoM m, CacheRWM m, IsPerm a, MonadTx code m, AsCodeHasura code, HasSystemDefined m)
   => CreatePerm a -> m EncJSON
 runCreatePerm (WithTable tn pd) = do
   addPermP2 tn pd
@@ -273,13 +280,13 @@ runCreatePerm (WithTable tn pd) = do
   pure successMsg
 
 dropPermP1
-  :: (QErrM m, CacheRM m, IsPerm a)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m, IsPerm a)
   => DropPerm a -> m (PermInfo a)
 dropPermP1 dp@(DropPerm tn rn) = do
   tabInfo <- askTabInfo tn
   askPermInfo tabInfo rn $ getPermAcc2 dp
 
-dropPermP2 :: forall a m. (MonadTx m, IsPerm a) => DropPerm a -> m ()
+dropPermP2 :: forall a m code. (MonadTx code m, AsCodeHasura code, IsPerm a) => DropPerm a -> m ()
 dropPermP2 dp@(DropPerm tn rn) = do
   liftTx $ dropPermFromCatalog tn rn pt
   where
@@ -287,7 +294,7 @@ dropPermP2 dp@(DropPerm tn rn) = do
     pt = permAccToType pa
 
 runDropPerm
-  :: (IsPerm a, UserInfoM m, CacheRWM m, MonadTx m)
+  :: (IsPerm a, UserInfoM m, CacheRWM m, MonadTx code m, AsCodeHasura code)
   => DropPerm a -> m EncJSON
 runDropPerm defn = do
   dropPermP1 defn

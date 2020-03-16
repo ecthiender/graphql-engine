@@ -118,8 +118,7 @@ module Hasura.RQL.Types.SchemaCache
 import qualified Hasura.GraphQL.Context            as GC
 
 import           Hasura.Db
-import           Hasura.Incremental                (Dependency, MonadDepend (..),
-                                                    selectKeyD)
+import           Hasura.Incremental                (Dependency, MonadDepend (..), selectKeyD)
 import           Hasura.Prelude
 import           Hasura.RQL.Types.Action
 import           Hasura.RQL.Types.BoolExp
@@ -135,6 +134,7 @@ import           Hasura.RQL.Types.SchemaCacheTypes
 import           Hasura.RQL.Types.Table
 import           Hasura.SQL.Types
 
+import           Control.Lens
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
@@ -224,7 +224,7 @@ instance (Monoid w, TableCoreInfoRM m) => TableCoreInfoRM (WriterT w m) where
 
 newtype TableCoreCacheRT m a
   = TableCoreCacheRT { runTableCoreCacheRT :: Dependency TableCoreCache -> m a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadError e, MonadState s, MonadWriter w, MonadTx)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadError e, MonadState s, MonadWriter w, MonadTx code)
     via (ReaderT (Dependency TableCoreCache) m)
   deriving (MonadTrans) via (ReaderT (Dependency TableCoreCache))
 
@@ -252,13 +252,13 @@ instance (Monad m) => CacheRM (CacheRT m) where
   askSchemaCache = CacheRT pure
 
 askFunctionInfo
-  :: (CacheRM m, QErrM m)
+  :: (CacheRM m, QErrM m code, AsCodeHasura code)
   => QualifiedFunction ->  m FunctionInfo
 askFunctionInfo qf = do
   sc <- askSchemaCache
   maybe throwNoFn return $ M.lookup qf $ scFunctions sc
   where
-    throwNoFn = throw400 NotExists $
+    throwNoFn = throw400 (_NotExists # ()) $
       "function not found in cache " <>> qf
 
 getDependentObjs :: SchemaCache -> SchemaObjId -> [SchemaObjId]

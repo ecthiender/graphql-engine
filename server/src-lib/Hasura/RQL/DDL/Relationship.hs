@@ -22,6 +22,7 @@ import           Hasura.RQL.DDL.Relationship.Types
 import           Hasura.RQL.Types
 import           Hasura.SQL.Types
 
+import Control.Lens ((#))
 import           Data.Aeson.Types
 import qualified Data.HashMap.Strict               as HM
 import qualified Data.HashSet                      as HS
@@ -29,7 +30,7 @@ import           Data.Tuple                        (swap)
 import           Instances.TH.Lift                 ()
 
 runCreateRelationship
-  :: (MonadTx m, CacheRWM m, HasSystemDefined m, ToJSON a)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m, HasSystemDefined m, ToJSON a)
   => RelType -> WithTable (RelDef a) -> m EncJSON
 runCreateRelationship relType (WithTable tableName relDef) = do
   insertRelationshipToCatalog tableName relType relDef
@@ -37,7 +38,7 @@ runCreateRelationship relType (WithTable tableName relDef) = do
   pure successMsg
 
 insertRelationshipToCatalog
-  :: (MonadTx m, HasSystemDefined m, ToJSON a)
+  :: (MonadTx code m, AsCodeHasura code, HasSystemDefined m, ToJSON a)
   => QualifiedTable
   -> RelType
   -> RelDef a
@@ -53,7 +54,7 @@ insertRelationshipToCatalog (QualifiedObject schema table) relType (RelDef name 
         (table_schema, table_name, rel_name, rel_type, rel_def, comment, is_system_defined)
       VALUES ($1, $2, $3, $4, $5 :: jsonb, $6, $7) |]
 
-runDropRel :: (MonadTx m, CacheRWM m) => DropRel -> m EncJSON
+runDropRel :: (MonadTx code m, AsCodeHasura code, CacheRWM m) => DropRel -> m EncJSON
 runDropRel (DropRel qt rn cascade) = do
   depObjs <- collectDependencies
   withNewInconsistentObjsCheck do
@@ -71,9 +72,10 @@ runDropRel (DropRel qt rn cascade) = do
       pure depObjs
 
 delRelFromCatalog
-  :: QualifiedTable
+  :: AsCodeHasura code
+  => QualifiedTable
   -> RelName
-  -> Q.TxE QErr ()
+  -> Q.TxE (QErr code) ()
 delRelFromCatalog (QualifiedObject sn tn) rn =
   Q.unitQE defaultTxErrorHandler [Q.sql|
            DELETE FROM
@@ -84,7 +86,7 @@ delRelFromCatalog (QualifiedObject sn tn) rn =
                 |] (sn, tn, rn) True
 
 objRelP2Setup
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => QualifiedTable
   -> HashSet ForeignKey
   -> RelDef ObjRelUsing
@@ -109,7 +111,7 @@ objRelP2Setup qt foreignKeys (RelDef rn ru _) = case ru of
     pure (RelInfo rn ObjRel colMap foreignTable False, dependencies)
 
 arrRelP2Setup
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => HashMap QualifiedTable (HashSet ForeignKey)
   -> QualifiedTable
   -> ArrRelDef
@@ -135,27 +137,27 @@ arrRelP2Setup foreignKeys qt (RelDef rn ru _) = case ru of
         mapping = HM.fromList $ map swap $ HM.toList colMap
     pure (RelInfo rn ArrRel mapping refqt False, deps)
 
-purgeRelDep :: (MonadTx m) => SchemaObjId -> m ()
+purgeRelDep :: (MonadTx code m, AsCodeHasura code) => SchemaObjId -> m ()
 purgeRelDep (SOTableObj tn (TOPerm rn pt)) = purgePerm tn rn pt
 purgeRelDep d = throw500 $ "unexpected dependency of relationship : "
                 <> reportSchemaObj d
 
 validateRelP1
-  :: (UserInfoM m, QErrM m, TableCoreInfoRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
   => QualifiedTable -> RelName -> m RelInfo
 validateRelP1 qt rn = do
   tabInfo <- askTableCoreInfo qt
   askRelType (_tciFieldInfoMap tabInfo) rn ""
 
 setRelCommentP2
-  :: (QErrM m, MonadTx m)
+  :: (QErrM m code, MonadTx code m, AsCodeHasura code)
   => SetRelComment -> m EncJSON
 setRelCommentP2 arc = do
   liftTx $ setRelComment arc
   return successMsg
 
 runSetRelComment
-  :: (QErrM m, CacheRM m, MonadTx m, UserInfoM m)
+  :: (QErrM m code, CacheRM m, MonadTx code m, AsCodeHasura code, UserInfoM m)
   => SetRelComment -> m EncJSON
 runSetRelComment defn = do
   void $ validateRelP1 qt rn
@@ -163,8 +165,10 @@ runSetRelComment defn = do
   where
     SetRelComment qt rn _ = defn
 
-setRelComment :: SetRelComment
-              -> Q.TxE QErr ()
+setRelComment
+  :: AsCodeHasura code
+  => SetRelComment
+  -> Q.TxE (QErr code) ()
 setRelComment (SetRelComment (QualifiedObject sn tn) rn comment) =
   Q.unitQE defaultTxErrorHandler [Q.sql|
            UPDATE hdb_catalog.hdb_relationship
@@ -175,16 +179,16 @@ setRelComment (SetRelComment (QualifiedObject sn tn) rn comment) =
                 |] (comment, sn, tn, rn) True
 
 getRequiredFkey
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => PGCol
   -> [ForeignKey]
   -> m ForeignKey
 getRequiredFkey col fkeys =
   case filteredFkeys of
-    []  -> throw400 ConstraintError
+    []  -> throw400 (_ConstraintError # ())
           "no foreign constraint exists on the given column"
     [k] -> return k
-    _   -> throw400 ConstraintError
+    _   -> throw400 (_ConstraintError # ())
            "more than one foreign key constraint exists on the given column"
   where
     filteredFkeys = filter ((== [col]) . HM.keys . _fkColumnMapping) fkeys

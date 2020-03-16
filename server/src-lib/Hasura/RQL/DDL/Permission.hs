@@ -46,6 +46,7 @@ import           Hasura.SQL.Types
 
 import qualified Database.PG.Query                  as Q
 
+import           Control.Lens                       (( # ))
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
@@ -69,7 +70,7 @@ type InsPermDef = PermDef InsPerm
 type CreateInsPerm = CreatePerm InsPerm
 
 procSetObj
-  :: (QErrM m)
+  :: (QErrM m code, AsCodeHasura code)
   => QualifiedTable
   -> FieldInfoMap FieldInfo
   -> Maybe (ColumnValues Value)
@@ -91,7 +92,7 @@ procSetObj tn fieldInfoMap mObj = do
     getDepReason = bool DRSessionVariable DROnType . isStaticValue
 
 buildInsPermInfo
-  :: (QErrM m, TableCoreInfoRM m)
+  :: (QErrM m code, TableCoreInfoRM m, AsCodeHasura code)
   => QualifiedTable
   -> FieldInfoMap FieldInfo
   -> PermDef InsPerm
@@ -142,7 +143,7 @@ instance FromJSON SelPerm where
     <*> o .:? "computed_fields" .!= []
 
 buildSelPermInfo
-  :: (QErrM m, TableCoreInfoRM m)
+  :: (QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
   => QualifiedTable
   -> FieldInfoMap FieldInfo
   -> SelPerm
@@ -163,7 +164,7 @@ buildSelPermInfo tn fieldInfoMap sp = withPathK "permission" $ do
       computedFieldInfo <- askComputedFieldInfo fieldInfoMap fieldName
       case _cfiReturnType computedFieldInfo of
         CFRScalar _               -> pure fieldName
-        CFRSetofTable returnTable -> throw400 NotSupported $
+        CFRSetofTable returnTable -> throw400 (_NotSupported # ()) $
           "select permissions on computed field " <> fieldName
           <<> " are auto-derived from the permissions on its returning table "
           <> returnTable <<> " and cannot be specified manually"
@@ -202,7 +203,7 @@ data UpdPerm
   { ucColumns :: !PermColSpec -- Allowed columns
   , ucSet     :: !(Maybe (ColumnValues Value)) -- Preset columns
   , ucFilter  :: !BoolExp     -- Filter expression (applied before update)
-  , ucCheck   :: !(Maybe BoolExp)     
+  , ucCheck   :: !(Maybe BoolExp)
   -- ^ Check expression, which must be true after update.
   -- This is optional because we don't want to break the v1 API
   -- but Nothing should be equivalent to the expression which always
@@ -216,7 +217,7 @@ type CreateUpdPerm = CreatePerm UpdPerm
 
 
 buildUpdPermInfo
-  :: (QErrM m, TableCoreInfoRM m)
+  :: (QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
   => QualifiedTable
   -> FieldInfoMap FieldInfo
   -> UpdPerm
@@ -224,7 +225,7 @@ buildUpdPermInfo
 buildUpdPermInfo tn fieldInfoMap (UpdPerm colSpec set fltr check) = do
   (be, beDeps) <- withPathK "filter" $
     procBoolExp tn fieldInfoMap fltr
-    
+
   checkExpr <- traverse (withPathK "check" . procBoolExp tn fieldInfoMap) check
 
   (setColsSQL, setHeaders, setColDeps) <- procSetObj tn fieldInfoMap set
@@ -265,7 +266,7 @@ type DelPermDef = PermDef DelPerm
 type CreateDelPerm = CreatePerm DelPerm
 
 buildDelPermInfo
-  :: (QErrM m, TableCoreInfoRM m)
+  :: (QErrM m code, AsCodeHasura code, TableCoreInfoRM m)
   => QualifiedTable
   -> FieldInfoMap FieldInfo
   -> DelPerm
@@ -296,7 +297,7 @@ data SetPermComment
 
 $(deriveJSON (aesonDrop 2 snakeCase) ''SetPermComment)
 
-setPermCommentP1 :: (UserInfoM m, QErrM m, CacheRM m) => SetPermComment -> m ()
+setPermCommentP1 :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m) => SetPermComment -> m ()
 setPermCommentP1 (SetPermComment qt rn pt _) = do
   tabInfo <- askTabInfo qt
   action tabInfo
@@ -307,21 +308,19 @@ setPermCommentP1 (SetPermComment qt rn pt _) = do
       PTUpdate -> assertPermDefined rn PAUpdate tabInfo
       PTDelete -> assertPermDefined rn PADelete tabInfo
 
-setPermCommentP2 :: (QErrM m, MonadTx m) => SetPermComment -> m EncJSON
+setPermCommentP2 :: (QErrM m code, AsCodeHasura code, MonadTx code m) => SetPermComment -> m EncJSON
 setPermCommentP2 apc = do
   liftTx $ setPermCommentTx apc
   return successMsg
 
 runSetPermComment
-  :: (QErrM m, CacheRM m, MonadTx m, UserInfoM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m, MonadTx code m, UserInfoM m)
   => SetPermComment -> m EncJSON
 runSetPermComment defn =  do
   setPermCommentP1 defn
   setPermCommentP2 defn
 
-setPermCommentTx
-  :: SetPermComment
-  -> Q.TxE QErr ()
+setPermCommentTx :: AsCodeHasura code => SetPermComment -> Q.TxE (QErr code) ()
 setPermCommentTx (SetPermComment (QualifiedObject sn tn) rn pt comment) =
   Q.unitQE defaultTxErrorHandler [Q.sql|
            UPDATE hdb_catalog.hdb_permission
@@ -332,8 +331,8 @@ setPermCommentTx (SetPermComment (QualifiedObject sn tn) rn pt comment) =
              AND perm_type = $5
                 |] (comment, sn, tn, rn, permTypeToCode pt) True
 
-purgePerm :: MonadTx m => QualifiedTable -> RoleName -> PermType -> m ()
-purgePerm qt rn pt = 
+purgePerm :: (MonadTx code m, AsCodeHasura code) => QualifiedTable -> RoleName -> PermType -> m ()
+purgePerm qt rn pt =
     case pt of
       PTInsert -> dropPermP2 @InsPerm dp
       PTSelect -> dropPermP2 @SelPerm dp
@@ -344,10 +343,11 @@ purgePerm qt rn pt =
     dp = DropPerm qt rn
 
 fetchPermDef
-  :: QualifiedTable
+  :: AsCodeHasura code
+  => QualifiedTable
   -> RoleName
   -> PermType
-  -> Q.TxE QErr (Value, Maybe T.Text)
+  -> Q.TxE (QErr code) (Value, Maybe T.Text)
 fetchPermDef (QualifiedObject sn tn) rn pt =
  (first Q.getAltJ .  Q.getRow) <$> Q.withQE defaultTxErrorHandler
       [Q.sql|

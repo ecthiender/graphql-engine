@@ -12,7 +12,7 @@ import           Hasura.SQL.Types
 import qualified Data.HashMap.Strict               as Map
 
 renameRelP2
-  :: (QErrM m, MonadTx m, CacheRM m)
+  :: (QErrM m code, MonadTx code m, CacheRM m)
   => QualifiedTable -> RelName -> RelInfo -> m ()
 renameRelP2 qt newRN relInfo = withNewInconsistentObjsCheck $ do
   tabInfo <- askTableCoreInfo qt
@@ -29,7 +29,7 @@ renameRelP2 qt newRN relInfo = withNewInconsistentObjsCheck $ do
     oldRN = riName relInfo
 
 runRenameRel
-  :: (MonadTx m, CacheRWM m)
+  :: (MonadTx code m, CacheRWM m)
   => RenameRel -> m EncJSON
 runRenameRel (RenameRel qt rn newRN) = do
   tabInfo <- askTableCoreInfo qt

@@ -9,6 +9,7 @@ module Hasura.RQL.DML.Select
   )
 where
 
+import           Control.Lens                   (( # ))
 import           Data.Aeson.Types
 import           Instances.TH.Lift              ()
 
@@ -26,7 +27,7 @@ import           Hasura.SQL.Types
 import qualified Database.PG.Query              as Q
 import qualified Hasura.SQL.DML                 as S
 
-convSelCol :: (UserInfoM m, QErrM m, CacheRM m)
+convSelCol :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
            => FieldInfoMap FieldInfo
            -> SelPermInfo
            -> SelCol
@@ -46,7 +47,7 @@ convSelCol fieldInfoMap spi (SCStar wildcard) =
   convWildcard fieldInfoMap spi wildcard
 
 convWildcard
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => FieldInfoMap FieldInfo
   -> SelPermInfo
   -> Wildcard
@@ -75,7 +76,7 @@ convWildcard fieldInfoMap selPermInfo wildcard =
 
     relExtCols wc = mapM (mkRelCol wc) relColInfos
 
-resolveStar :: (UserInfoM m, QErrM m, CacheRM m)
+resolveStar :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
             => FieldInfoMap FieldInfo
             -> SelPermInfo
             -> SelectQ
@@ -101,7 +102,7 @@ resolveStar fim spi (SelectG selCols mWh mOb mLt mOf) = do
     equals _ _                         = False
 
 convOrderByElem
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => SessVarBldr m
   -> (FieldInfoMap FieldInfo, SelPermInfo)
   -> OrderByCol
@@ -114,33 +115,33 @@ convOrderByElem sessVarBldr (flds, spi) = \case
         checkSelOnCol spi (pgiColumn colInfo)
         let ty = pgiType colInfo
         if isScalarColumnWhere isGeoType ty
-          then throw400 UnexpectedPayload $ mconcat
+          then throw400 (_UnexpectedPayload # ()) $ mconcat
            [ fldName <<> " has type 'geometry'"
            , " and cannot be used in order_by"
            ]
           else return $ AOCPG $ pgiColumn colInfo
-      FIRelationship _ -> throw400 UnexpectedPayload $ mconcat
+      FIRelationship _ -> throw400 (_UnexpectedPayload # ()) $ mconcat
         [ fldName <<> " is a"
         , " relationship and should be expanded"
         ]
-      FIComputedField _ -> throw400 UnexpectedPayload $ mconcat
+      FIComputedField _ -> throw400 (_UnexpectedPayload # ()) $ mconcat
         [ fldName <<> " is a"
         , " computed field and can't be used in 'order_by'"
         ]
   OCRel fldName rest -> do
     fldInfo <- askFieldInfo flds fldName
     case fldInfo of
-      FIColumn _ -> throw400 UnexpectedPayload $ mconcat
+      FIColumn _ -> throw400 (_UnexpectedPayload # ()) $ mconcat
         [ fldName <<> " is a Postgres column"
         , " and cannot be chained further"
         ]
-      FIComputedField _ -> throw400 UnexpectedPayload $ mconcat
+      FIComputedField _ -> throw400 (_UnexpectedPayload # ()) $ mconcat
         [ fldName <<> " is a"
         , " computed field and can't be used in 'order_by'"
         ]
       FIRelationship relInfo -> do
         when (riType relInfo == ArrRel) $
-          throw400 UnexpectedPayload $ mconcat
+          throw400 (_UnexpectedPayload # ()) $ mconcat
           [ fldName <<> " is an array relationship"
           ," and can't be used in 'order_by'"
           ]
@@ -150,7 +151,7 @@ convOrderByElem sessVarBldr (flds, spi) = \case
           convOrderByElem sessVarBldr (relFim, relSpi) rest
 
 convSelectQ
-  :: (UserInfoM m, QErrM m, CacheRM m, HasSQLGenCtx m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m, HasSQLGenCtx m)
   => FieldInfoMap FieldInfo  -- Table information of current table
   -> SelPermInfo   -- Additional select permission info
   -> SelectQExt     -- Given Select Query
@@ -205,7 +206,7 @@ convSelectQ fieldInfoMap selPermInfo selQ sessVarBldr prepValBldr = do
     mPermLimit = spiLimit selPermInfo
 
 convExtSimple
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => FieldInfoMap FieldInfo
   -> SelPermInfo
   -> PGCol
@@ -217,7 +218,7 @@ convExtSimple fieldInfoMap selPermInfo pgCol = do
     relWhenPGErr = "relationships have to be expanded"
 
 convExtRel
-  :: (UserInfoM m, QErrM m, CacheRM m, HasSQLGenCtx m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m, HasSQLGenCtx m)
   => FieldInfoMap FieldInfo
   -> RelName
   -> Maybe RelName
@@ -227,14 +228,13 @@ convExtRel
   -> m (Either ObjSel ArrSel)
 convExtRel fieldInfoMap relName mAlias selQ sessVarBldr prepValBldr = do
   -- Point to the name key
-  relInfo <- withPathK "name" $
-    askRelType fieldInfoMap relName pgWhenRelErr
+  relInfo <- withPathK "name" $ askRelType fieldInfoMap relName pgWhenRelErr
   let (RelInfo _ relTy colMapping relTab _) = relInfo
   (relCIM, relSPI) <- fetchRelDet relName relTab
   annSel <- convSelectQ relCIM relSPI selQ sessVarBldr prepValBldr
   case relTy of
     ObjRel -> do
-      when misused $ throw400 UnexpectedPayload objRelMisuseMsg
+      when misused $ throw400 (_UnexpectedPayload # ()) objRelMisuseMsg
       return $ Left $ AnnRelG (fromMaybe relName mAlias) colMapping annSel
     ArrRel ->
       return $ Right $ ASSimple $ AnnRelG (fromMaybe relName mAlias)
@@ -254,7 +254,7 @@ convExtRel fieldInfoMap relName mAlias selQ sessVarBldr prepValBldr = do
               ]
 
 convSelectQuery
-  :: (UserInfoM m, QErrM m, CacheRM m, HasSQLGenCtx m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m, HasSQLGenCtx m)
   => SessVarBldr m
   -> (PGColumnType -> Value -> m S.SQLExp)
   -> SelectQuery
@@ -268,7 +268,7 @@ convSelectQuery sessVarBldr prepArgBuilder (DMLQuery qt selQ) = do
   convSelectQ fieldInfo selPermInfo
     extSelQ sessVarBldr prepArgBuilder
 
-selectP2 :: JsonAggSelect -> (AnnSimpleSel, DS.Seq Q.PrepArg) -> Q.TxE QErr EncJSON
+selectP2 :: AsCodeHasura code => JsonAggSelect -> (AnnSimpleSel, DS.Seq Q.PrepArg) -> Q.TxE (QErr code) EncJSON
 selectP2 jsonAggSelect (sel, p) =
   encJFromBS . runIdentity . Q.getRow
   <$> Q.rawQE dmlTxErrorHandler (Q.fromBuilder selectSQL) (toList p) True
@@ -283,23 +283,23 @@ selectAggQuerySQL :: AnnAggSel -> Q.Query
 selectAggQuerySQL =
   Q.fromBuilder . toSQL . mkAggSelect
 
-asSingleRowJsonResp :: Q.Query -> [Q.PrepArg] -> Q.TxE QErr EncJSON
+asSingleRowJsonResp :: AsCodeHasura code => Q.Query -> [Q.PrepArg] -> Q.TxE (QErr code) EncJSON
 asSingleRowJsonResp query args =
   encJFromBS . runIdentity . Q.getRow
   <$> Q.rawQE dmlTxErrorHandler query args True
 
 phaseOne
-  :: (QErrM m, UserInfoM m, CacheRM m, HasSQLGenCtx m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m, HasSQLGenCtx m)
   => SelectQuery -> m (AnnSimpleSel, DS.Seq Q.PrepArg)
 phaseOne =
   runDMLP1T . convSelectQuery sessVarFromCurrentSetting binRHSBuilder
 
-phaseTwo :: (MonadTx m) => (AnnSimpleSel, DS.Seq Q.PrepArg) -> m EncJSON
+phaseTwo :: (MonadTx code m, AsCodeHasura code) => (AnnSimpleSel, DS.Seq Q.PrepArg) -> m EncJSON
 phaseTwo =
   liftTx . selectP2 JASMultipleRows
 
 runSelect
-  :: (QErrM m, UserInfoM m, CacheRM m, HasSQLGenCtx m, MonadTx m)
+  :: (QErrM m code, UserInfoM m, CacheRM m, HasSQLGenCtx m, MonadTx code m, AsCodeHasura code)
   => SelectQuery -> m EncJSON
 runSelect q =
   phaseOne q >>= phaseTwo

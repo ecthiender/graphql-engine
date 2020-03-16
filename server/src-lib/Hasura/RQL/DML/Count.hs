@@ -61,7 +61,7 @@ mkSQLCount (CountQueryP1 tn (permFltr, mWc) mDistCols) =
 -- SELECT count(*) FROM (SELECT DISTINCT c1, .. cn FROM .. WHERE ..) r;
 -- SELECT count(*) FROM (SELECT * FROM .. WHERE ..) r;
 validateCountQWith
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => SessVarBldr m
   -> (PGColumnType -> Value -> m S.SQLExp)
   -> CountQuery
@@ -100,13 +100,13 @@ validateCountQWith sessVarBldr prepValBldr (CountQuery qt mDistCols mWhere) = do
       "Relationships can't be used in \"distinct\"."
 
 validateCountQ
-  :: (QErrM m, UserInfoM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, UserInfoM m, CacheRM m)
   => CountQuery -> m (CountQueryP1, DS.Seq Q.PrepArg)
 validateCountQ =
   runDMLP1T . validateCountQWith sessVarFromCurrentSetting binRHSBuilder
 
 countQToTx
-  :: (QErrM m, MonadTx m)
+  :: (QErrM m code, MonadTx code m, AsCodeHasura code)
   => (CountQueryP1, DS.Seq Q.PrepArg) -> m EncJSON
 countQToTx (u, p) = do
   qRes <- liftTx $ Q.rawQE dmlTxErrorHandler
@@ -118,7 +118,7 @@ countQToTx (u, p) = do
       BB.byteString "{\"count\":" <> BB.intDec c <> BB.char7 '}'
 
 runCount
-  :: (QErrM m, UserInfoM m, CacheRM m, MonadTx m)
+  :: (QErrM m code, UserInfoM m, CacheRM m, MonadTx code m, AsCodeHasura code)
   => CountQuery -> m EncJSON
 runCount q =
   validateCountQ q >>= countQToTx

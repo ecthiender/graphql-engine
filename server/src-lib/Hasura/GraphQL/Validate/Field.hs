@@ -111,8 +111,9 @@ data FieldGroup
 
 withDirectives
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReusability m
+     , AsCodeHasura code
      )
   => [G.Directive]
   -> m a
@@ -148,8 +149,9 @@ withDirectives dirs act = do
 
 denormSel
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReusability m
+     , AsCodeHasura code
      )
   => [G.Name] -- visited fragments
   -> ObjTyInfo -- parent type info
@@ -170,7 +172,8 @@ denormSel visFrags parObjTyInfo sel = case sel of
 
 processArgs
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      )
   => ParamMap
   -> [G.Argument]
@@ -202,8 +205,9 @@ processArgs fldParams argsL = do
 
 denormFld
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReusability m
+     , AsCodeHasura code
      )
   => [G.Name] -- visited fragments
   -> ObjFldInfo
@@ -244,8 +248,9 @@ denormFld visFrags fldInfo (G.Field aliasM name args dirs selSet) = do
 
 denormInlnFrag
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReusability m
+     , AsCodeHasura code
      )
   => [G.Name] -- visited fragments
   -> ObjTyInfo -- type information of the field
@@ -264,8 +269,9 @@ denormInlnFrag visFrags fldTyInfo inlnFrag = do
 
 denormSelSet
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReusability m
+     , AsCodeHasura code
      )
   => [G.Name] -- visited fragments
   -> ObjTyInfo
@@ -282,8 +288,9 @@ denormSelSet visFrags fldTyInfo selSet =
 
 mergeFields
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReusability m
+     , AsCodeHasura code
      )
   => Seq.Seq Field
   -> m (Seq.Seq Field)
@@ -314,8 +321,9 @@ mergeFields flds =
 
 denormFrag
   :: ( MonadReader ValidationCtx m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReusability m
+     , AsCodeHasura code
      )
   => [G.Name] -- visited fragments
   -> G.NamedType -- parent type

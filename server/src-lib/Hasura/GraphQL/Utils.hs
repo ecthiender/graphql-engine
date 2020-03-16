@@ -22,7 +22,7 @@ import qualified Language.GraphQL.Draft.Syntax as G
 showName :: G.Name -> Text
 showName name = "\"" <> G.unName name <> "\""
 
-throwVE :: (MonadError (QErr c) m, AsCodeHasura c) => Text -> m a
+throwVE :: (MonadError (QErr code) m, AsCodeHasura code) => Text -> m a
 throwVE = throw400 $ review _ValidationFailed ()
 
 showNamedTy :: G.NamedType -> Text

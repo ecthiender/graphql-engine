@@ -21,7 +21,9 @@ import qualified Hasura.SQL.DML                    as S
 
 type OpExp = OpExpG UnresolvedVal
 
-parseOpExps :: (MonadReusability m, MonadError (QErr a) m) => PGColumnType -> AnnInpVal -> m [OpExp]
+parseOpExps
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
+  => PGColumnType -> AnnInpVal -> m [OpExp]
 parseOpExps colTy annVal = do
   opExpsM <- flip withObjectM annVal $ \nt objM -> forM objM $ \obj ->
     forM (OMap.toList obj) $ \(k, v) ->
@@ -139,7 +141,7 @@ parseOpExps colTy annVal = do
       mkParameterizablePGValue <$> asPGColumnValue geomminVal
 
 parseCastExpression
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => AnnInpVal -> m (Maybe (CastExp UnresolvedVal))
 parseCastExpression =
   withObjectM $ \_ objM -> forM objM $ \obj -> do
@@ -151,9 +153,10 @@ parseCastExpression =
 
 parseColExp
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReader r m
      , Has FieldMap r
+     , AsCodeHasura code
      )
   => G.NamedType -> G.Name -> AnnInpVal
   -> m (AnnBoolExpFld UnresolvedVal)
@@ -172,9 +175,10 @@ parseColExp nt n val = do
 
 parseBoolExp
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
      , MonadReader r m
      , Has FieldMap r
+     , AsCodeHasura code
      )
   => AnnInpVal -> m (AnnBoolExp UnresolvedVal)
 parseBoolExp annGVal = do
@@ -192,7 +196,7 @@ parseBoolExp annGVal = do
 type PGColValMap = Map.HashMap G.Name AnnInpVal
 
 pgColValToBoolExp
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => PGColArgMap -> PGColValMap -> m AnnBoolExpUnresolved
 pgColValToBoolExp colArgMap colValMap = do
   colExps <- forM colVals $ \(name, val) ->

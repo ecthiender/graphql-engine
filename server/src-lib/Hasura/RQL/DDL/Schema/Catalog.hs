@@ -26,12 +26,12 @@ import           Hasura.RQL.Types
 import           Hasura.RQL.Types.Catalog
 import           Hasura.SQL.Types
 
-fetchCatalogData :: (MonadTx m) => m CatalogMetadata
+fetchCatalogData :: (MonadTx code m, AsCodeHasura code) => m CatalogMetadata
 fetchCatalogData =
   liftTx $ Q.getAltJ . runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler
   $(Q.sqlFromFile "src-rsr/catalog_metadata.sql") () True
 
-purgeDependentObject :: (MonadTx m) => SchemaObjId -> m ()
+purgeDependentObject :: (MonadTx code m, AsCodeHasura code) => SchemaObjId -> m ()
 purgeDependentObject = \case
   SOTableObj tn (TOPerm rn pt) -> liftTx $ dropPermFromCatalog tn rn pt
   SOTableObj qt (TORel rn) -> liftTx $ delRelFromCatalog qt rn
@@ -41,7 +41,7 @@ purgeDependentObject = \case
   schemaObjId -> throw500 $ "unexpected dependent object: " <> reportSchemaObj schemaObjId
 
 saveTableToCatalog
-  :: (MonadTx m, HasSystemDefined m) => QualifiedTable -> Bool -> TableConfig -> m ()
+  :: (MonadTx code m, AsCodeHasura code, HasSystemDefined m) => QualifiedTable -> Bool -> TableConfig -> m ()
 saveTableToCatalog (QualifiedObject sn tn) isEnum config = do
   systemDefined <- askSystemDefined
   liftTx $ Q.unitQE defaultTxErrorHandler [Q.sql|
@@ -52,14 +52,14 @@ saveTableToCatalog (QualifiedObject sn tn) isEnum config = do
   where
     configVal = Q.AltJ $ toJSON config
 
-updateTableIsEnumInCatalog :: (MonadTx m) => QualifiedTable -> Bool -> m ()
+updateTableIsEnumInCatalog :: (MonadTx code m, AsCodeHasura code) => QualifiedTable -> Bool -> m ()
 updateTableIsEnumInCatalog (QualifiedObject sn tn) isEnum = liftTx $
   Q.unitQE defaultTxErrorHandler [Q.sql|
       UPDATE "hdb_catalog"."hdb_table" SET is_enum = $3
       WHERE table_schema = $1 AND table_name = $2
     |] (sn, tn, isEnum) False
 
-updateTableConfig :: (MonadTx m) => QualifiedTable -> TableConfig -> m ()
+updateTableConfig :: (MonadTx code m, AsCodeHasura code) => QualifiedTable -> TableConfig -> m ()
 updateTableConfig (QualifiedObject sn tn) config = liftTx $
   Q.unitQE defaultTxErrorHandler [Q.sql|
            UPDATE "hdb_catalog"."hdb_table"
@@ -69,13 +69,13 @@ updateTableConfig (QualifiedObject sn tn) config = liftTx $
   where
     configVal = Q.AltJ $ toJSON config
 
-deleteTableFromCatalog :: (MonadTx m) => QualifiedTable -> m ()
+deleteTableFromCatalog :: (MonadTx code m, AsCodeHasura code) => QualifiedTable -> m ()
 deleteTableFromCatalog (QualifiedObject sn tn) = liftTx $ Q.unitQE defaultTxErrorHandler [Q.sql|
     DELETE FROM "hdb_catalog"."hdb_table"
     WHERE table_schema = $1 AND table_name = $2
   |] (sn, tn) False
 
-getTableConfig :: MonadTx m => QualifiedTable -> m TableConfig
+getTableConfig :: (MonadTx code m, AsCodeHasura code) => QualifiedTable -> m TableConfig
 getTableConfig (QualifiedObject sn tn) = liftTx $
   Q.getAltJ . runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler
     [Q.sql|

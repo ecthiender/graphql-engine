@@ -60,7 +60,7 @@ askPermInfo' pa tableInfo = do
       | otherwise             = M.lookup roleName rpim
 
 askPermInfo
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => PermAccessor c
   -> TableInfo
   -> m c
@@ -69,7 +69,7 @@ askPermInfo pa tableInfo = do
   mPermInfo <- askPermInfo' pa tableInfo
   case mPermInfo of
     Just c  -> return c
-    Nothing -> throw400 PermissionDenied $ mconcat
+    Nothing -> throw400 (_PermissionDenied # ()) $ mconcat
       [ pt <> " on " <>> _tciName (_tiCoreInfo tableInfo)
       , " for role " <>> roleName
       , " is not allowed. "
@@ -85,35 +85,35 @@ isTabUpdatable role ti
     rpim = _tiRolePermInfoMap ti
 
 askInsPermInfo
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => TableInfo -> m InsPermInfo
 askInsPermInfo = askPermInfo PAInsert
 
 askSelPermInfo
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => TableInfo -> m SelPermInfo
 askSelPermInfo = askPermInfo PASelect
 
 askUpdPermInfo
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => TableInfo -> m UpdPermInfo
 askUpdPermInfo = askPermInfo PAUpdate
 
 askDelPermInfo
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => TableInfo -> m DelPermInfo
 askDelPermInfo = askPermInfo PADelete
 
-verifyAsrns :: (MonadError QErr m) => [a -> m ()] -> [a] -> m ()
+verifyAsrns :: (MonadError (QErr code) m) => [a -> m ()] -> [a] -> m ()
 verifyAsrns preds xs = indexedForM_ xs $ \a -> mapM_ ($ a) preds
 
-checkSelOnCol :: (UserInfoM m, QErrM m)
+checkSelOnCol :: (UserInfoM m, QErrM m code, AsCodeHasura code)
               => SelPermInfo -> PGCol -> m ()
 checkSelOnCol selPermInfo =
   checkPermOnCol PTSelect (spiCols selPermInfo)
 
 checkPermOnCol
-  :: (UserInfoM m, QErrM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code)
   => PermType
   -> HS.HashSet PGCol
   -> PGCol
@@ -121,7 +121,7 @@ checkPermOnCol
 checkPermOnCol pt allowedCols pgCol = do
   roleName <- askCurRole
   unless (HS.member pgCol allowedCols) $
-    throw400 PermissionDenied $ permErrMsg roleName
+    throw400 (_PermissionDenied # ()) $ permErrMsg roleName
   where
     permErrMsg roleName
       | roleName == adminRole = "no such column exists : " <>> pgCol
@@ -131,7 +131,7 @@ checkPermOnCol pt allowedCols pgCol = do
         , permTypeToCode pt <> " column " <>> pgCol
         ]
 
-binRHSBuilder :: (QErrM m) => PGColumnType -> Value -> DMLP1T m S.SQLExp
+binRHSBuilder :: (QErrM m code, AsCodeHasura code) => PGColumnType -> Value -> DMLP1T m S.SQLExp
 binRHSBuilder colType val = do
   preparedArgs <- get
   scalarValue <- parsePGScalarValue colType val
@@ -139,7 +139,7 @@ binRHSBuilder colType val = do
   return $ toPrepParam (DS.length preparedArgs + 1) (pstType scalarValue)
 
 fetchRelTabInfo
-  :: (QErrM m, CacheRM m)
+  :: (QErrM m code, AsCodeHasura code, CacheRM m)
   => QualifiedTable
   -> m TableInfo
 fetchRelTabInfo refTabName =
@@ -149,7 +149,7 @@ fetchRelTabInfo refTabName =
 type SessVarBldr m = PGType PGScalarType -> SessVar -> m S.SQLExp
 
 fetchRelDet
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => RelName -> QualifiedTable
   -> m (FieldInfoMap FieldInfo, SelPermInfo)
 fetchRelDet relName refTabName = do
@@ -171,7 +171,7 @@ fetchRelDet relName refTabName = do
       ]
 
 checkOnColExp
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => SelPermInfo
   -> SessVarBldr m
   -> AnnBoolExpFldSQL
@@ -223,7 +223,7 @@ currentSession :: S.SQLExp
 currentSession = S.SEUnsafe "current_setting('hasura.user')::json"
 
 checkSelPerm
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => SelPermInfo
   -> SessVarBldr m
   -> AnnBoolExpSQL
@@ -232,7 +232,7 @@ checkSelPerm spi sessVarBldr =
   traverse (checkOnColExp spi sessVarBldr)
 
 convBoolExp
-  :: (UserInfoM m, QErrM m, CacheRM m)
+  :: (UserInfoM m, QErrM m code, AsCodeHasura code, CacheRM m)
   => FieldInfoMap FieldInfo
   -> SelPermInfo
   -> BoolExp
@@ -253,7 +253,7 @@ convBoolExp cim spi be sessVarBldr prepValBldr = do
           (S.SEArray $ map (toTxtValue . WithScalarType scalarType) scalarValues)
           (S.mkTypeAnn $ PGTypeArray scalarType)
 
-dmlTxErrorHandler :: Q.PGTxErr -> QErr
+dmlTxErrorHandler :: AsCodeHasura code => Q.PGTxErr -> QErr code
 dmlTxErrorHandler = mkTxErrorHandler $ \case
   PGIntegrityConstraintViolation _ -> True
   PGDataException _ -> True
@@ -276,14 +276,14 @@ toJSONableExp strfyNum colTy asText expn
   | otherwise = expn
 
 -- validate headers
-validateHeaders :: (UserInfoM m, QErrM m) => [T.Text] -> m ()
+validateHeaders :: (UserInfoM m, QErrM m code, AsCodeHasura code) => [T.Text] -> m ()
 validateHeaders depHeaders = do
   headers <- getVarNames . userVars <$> askUserInfo
   forM_ depHeaders $ \hdr ->
     unless (hdr `elem` map T.toLower headers) $
-    throw400 NotFound $ hdr <<> " header is expected but not found"
+    throw400 (_NotFound # ()) $ hdr <<> " header is expected but not found"
 
 -- validate limit and offset int values
-onlyPositiveInt :: MonadError QErr m => Int -> m ()
-onlyPositiveInt i = when (i < 0) $ throw400 NotSupported
+onlyPositiveInt :: (MonadError (QErr code) m, AsCodeHasura code) => Int -> m ()
+onlyPositiveInt i = when (i < 0) $ throw400 (_NotSupported # ())
   "unexpected negative value"

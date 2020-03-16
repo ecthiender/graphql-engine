@@ -159,14 +159,14 @@ $(deriveJSON
   ''RQLQueryV2
  )
 
-fetchLastUpdate :: Q.TxE QErr (Maybe (InstanceId, UTCTime, CacheInvalidations))
+fetchLastUpdate :: Q.TxE (QErr code) (Maybe (InstanceId, UTCTime, CacheInvalidations))
 fetchLastUpdate = over (_Just._3) Q.getAltJ <$> Q.withQE defaultTxErrorHandler [Q.sql|
   SELECT instance_id::text, occurred_at, invalidations
   FROM hdb_catalog.hdb_schema_update_event
   ORDER BY occurred_at DESC LIMIT 1
   |] () True
 
-recordSchemaUpdate :: InstanceId -> CacheInvalidations -> Q.TxE QErr ()
+recordSchemaUpdate :: InstanceId -> CacheInvalidations -> Q.TxE (QErr code) ()
 recordSchemaUpdate instanceId invalidations =
   liftTx $ Q.unitQE defaultTxErrorHandler [Q.sql|
              INSERT INTO hdb_catalog.hdb_schema_update_event
@@ -176,7 +176,7 @@ recordSchemaUpdate instanceId invalidations =
             |] (instanceId, Q.AltJ invalidations) True
 
 runQuery
-  :: (HasVersion, MonadIO m, MonadError QErr m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
   => PGExecCtx -> InstanceId
   -> UserInfo -> RebuildableSchemaCache Run -> HTTP.Manager
   -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, RebuildableSchemaCache Run)
@@ -284,11 +284,11 @@ queryModifiesSchemaCache (RQV2 qi) = case qi of
   RQV2SetTableCustomFields _ -> True
   RQV2TrackFunction _        -> True
 
-getQueryAccessMode :: (MonadError QErr m) => RQLQuery -> m Q.TxAccess
+getQueryAccessMode :: (MonadError (QErr code) m) => RQLQuery -> m Q.TxAccess
 getQueryAccessMode q = (fromMaybe Q.ReadOnly) <$> getQueryAccessMode' q
   where
     getQueryAccessMode' ::
-         (MonadError QErr m) => RQLQuery -> m (Maybe Q.TxAccess)
+         (MonadError (QErr code) m) => RQLQuery -> m (Maybe Q.TxAccess)
     getQueryAccessMode' (RQV1 q') =
       case q' of
         RQSelect _ -> pure Nothing
@@ -320,7 +320,7 @@ reconcileAccessModes (Just mode1) (Just mode2)
   | otherwise = Left mode2
 
 runQueryM
-  :: ( HasVersion, QErrM m, CacheRWM m, UserInfoM m, MonadTx m
+  :: ( HasVersion, QErrM m code, CacheRWM m, UserInfoM m, MonadTx code m
      , MonadIO m, HasHttpManager m, HasSQLGenCtx m
      , HasSystemDefined m
      )

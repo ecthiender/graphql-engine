@@ -71,7 +71,9 @@ scalarR (ScalarTyInfo descM name _ _) fld =
 -- 4.5.2.2
 objectTypeR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => ObjTyInfo
   -> Field
   -> m J.Object
@@ -102,7 +104,7 @@ getImplTypes aot = do
 
 -- 4.5.2.3
 unionR
-  :: (MonadReader t m, MonadError (QErr a) m, Has TypeMap t)
+  :: (MonadReader t m, MonadError (QErr code) m, AsCodeHasura code, Has TypeMap t)
   => UnionTyInfo -> Field -> m J.Object
 unionR u@(UnionTyInfo descM n _) fld =
   withSubFields (_fSelSet fld) $ \subFld ->
@@ -118,7 +120,9 @@ unionR u@(UnionTyInfo descM n _) fld =
 -- 4.5.2.4
 ifaceR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => G.NamedType
   -> Field
   -> m J.Object
@@ -130,7 +134,9 @@ ifaceR n fld = do
 
 ifaceR'
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => IFaceTyInfo
   -> Field
   -> m J.Object
@@ -168,7 +174,9 @@ enumTypeR (EnumTyInfo descM n vals _) fld =
 -- 4.5.2.6
 inputObjR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => InpObjTyInfo
   -> Field
   -> m J.Object
@@ -186,7 +194,9 @@ inputObjR (InpObjTyInfo descM nt flds _) fld =
 -- 4.5.2.7
 listTypeR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => G.ListType -> Field -> m J.Object
 listTypeR (G.ListType ty) fld =
   withSubFields (_fSelSet fld) $ \subFld ->
@@ -199,7 +209,9 @@ listTypeR (G.ListType ty) fld =
 -- 4.5.2.8
 nonNullR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => G.GType -> Field -> m J.Object
 nonNullR gTyp fld =
   withSubFields (_fSelSet fld) $ \subFld ->
@@ -214,7 +226,9 @@ nonNullR gTyp fld =
 
 namedTypeR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => G.NamedType
   -> Field
   -> m J.Object
@@ -224,7 +238,9 @@ namedTypeR nt fld = do
 
 namedTypeR'
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => Field
   -> TypeInfo
   -> m J.Object
@@ -239,7 +255,9 @@ namedTypeR' fld = \case
 -- 4.5.3
 fieldR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => ObjFldInfo -> Field -> m J.Object
 fieldR (ObjFldInfo descM n params ty _) fld =
   withSubFields (_fSelSet fld) $ \subFld ->
@@ -256,7 +274,9 @@ fieldR (ObjFldInfo descM n params ty _) fld =
 -- 4.5.4
 inputValueR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => Field -> InpValInfo -> m J.Object
 inputValueR fld (InpValInfo descM n defM ty) =
   withSubFields (_fSelSet fld) $ \subFld ->
@@ -285,7 +305,9 @@ enumValueR fld (EnumValInfo descM enumVal isDeprecated) =
 -- 4.5.6
 directiveR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => Field -> DirectiveInfo -> m J.Object
 directiveR fld (DirectiveInfo descM n args locs) =
   withSubFields (_fSelSet fld) $ \subFld ->
@@ -305,7 +327,9 @@ showDirLoc = \case
 
 gtypeR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => G.GType -> Field -> m J.Object
 gtypeR ty fld =
   case ty of
@@ -316,7 +340,9 @@ gtypeR ty fld =
 
 schemaR
   :: ( MonadReader r m, Has TypeMap r
-     , MonadError (QErr a) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => Field -> m J.Object
 schemaR fld =
   withSubFields (_fSelSet fld) $ \subFld -> do
@@ -333,7 +359,7 @@ schemaR fld =
     _              -> return J.Null
 
 typeR
-  :: (MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has TypeMap r)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code, MonadReader r m, Has TypeMap r)
   => Field -> m J.Value
 typeR fld = do
   name <- asPGColText =<< getArg args "name"
@@ -342,7 +368,7 @@ typeR fld = do
     args = _fArguments fld
 
 typeR'
-  :: (MonadReader r m, Has TypeMap r, MonadError (QErr a) m)
+  :: (MonadReader r m, Has TypeMap r, MonadError (QErr code) m, AsCodeHasura code)
   => G.Name -> Field -> m J.Value
 typeR' n fld = do
   tyMap <- asks getter

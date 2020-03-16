@@ -5,6 +5,7 @@ module Hasura.RQL.DDL.CustomTypes
   , resolveCustomTypes
   ) where
 
+import Control.Lens (( # ))
 import           Control.Monad.Validate
 
 import qualified Data.HashMap.Strict               as Map
@@ -239,9 +240,10 @@ showCustomTypeValidationError = \case
 
 
 runSetCustomTypes
-  :: ( MonadError QErr m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , CacheRWM m
-     , MonadTx m
+     , MonadTx code m
      )
   => CustomTypes -> m EncJSON
 runSetCustomTypes customTypes = do
@@ -249,7 +251,7 @@ runSetCustomTypes customTypes = do
   buildSchemaCacheFor MOCustomTypes
   return successMsg
 
-persistCustomTypes :: MonadTx m => CustomTypes -> m ()
+persistCustomTypes :: (MonadTx code m, AsCodeHasura code) => CustomTypes -> m ()
 persistCustomTypes customTypes = liftTx do
   clearCustomTypes
   Q.unitQE defaultTxErrorHandler [Q.sql|
@@ -258,17 +260,17 @@ persistCustomTypes customTypes = liftTx do
       VALUES ($1)
   |] (Identity $ Q.AltJ customTypes) False
 
-clearCustomTypes :: Q.TxE QErr ()
+clearCustomTypes :: AsCodeHasura code => Q.TxE (QErr code) ()
 clearCustomTypes = do
   Q.unitQE defaultTxErrorHandler [Q.sql|
     DELETE FROM hdb_catalog.hdb_custom_types
   |] () False
 
 resolveCustomTypes
-  :: (MonadError QErr m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => TableCache -> CustomTypes -> m (NonObjectTypeMap, AnnotatedObjects)
 resolveCustomTypes tableCache customTypes = do
-  either (throw400 ConstraintViolation . showErrors) pure
+  either (throw400 (_ConstraintViolation # ()) . showErrors) pure
     =<< runValidateT (validateCustomTypeDefinitions tableCache customTypes)
   buildCustomTypesSchemaPartial tableCache customTypes
   where

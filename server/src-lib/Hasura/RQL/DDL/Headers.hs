@@ -1,5 +1,6 @@
 module Hasura.RQL.DDL.Headers where
 
+import           Control.Lens               hiding ((.=))
 import           Data.Aeson
 import           Hasura.Incremental         (Cacheable)
 import           Hasura.Prelude
@@ -45,7 +46,7 @@ instance ToJSON HeaderConf where
 
 
 -- | Resolve configuration headers
-makeHeadersFromConf :: (MonadError QErr m, MonadIO m) => [HeaderConf] -> m [HTTP.Header]
+makeHeadersFromConf :: (MonadError (QErr code) m, MonadIO m, AsCodeHasura code) => [HeaderConf] -> m [HTTP.Header]
 makeHeadersFromConf = mapM getHeader
   where
     getHeader hconf = do
@@ -55,5 +56,5 @@ makeHeadersFromConf = mapM getHeader
           (HeaderConf name (HVEnv val))   -> do
             mEnv <- liftIO $ lookupEnv (T.unpack val)
             case mEnv of
-              Nothing     -> throw400 NotFound $ "environment variable '" <> val <> "' not set"
+              Nothing     -> throw400 (review _NotFound ()) $ "environment variable '" <> val <> "' not set"
               Just envval -> pure (name, T.pack envval)
