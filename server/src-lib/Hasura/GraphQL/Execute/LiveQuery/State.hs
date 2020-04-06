@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 -- | Top-level management of live query poller threads. The implementation of the polling itself is
 -- in "Hasura.GraphQL.Execute.LiveQuery.Poll". See "Hasura.GraphQL.Execute.LiveQuery" for high-level
 -- details.
@@ -26,6 +27,7 @@ import           Hasura.Db
 import           Hasura.GraphQL.Execute.LiveQuery.Options
 import           Hasura.GraphQL.Execute.LiveQuery.Plan
 import           Hasura.GraphQL.Execute.LiveQuery.Poll
+import           Hasura.RQL.Types
 
 -- | The top-level datatype that holds the state for all active live queries.
 data LiveQueriesState
@@ -84,7 +86,9 @@ addLiveQuery lqState plan onResultAction = do
   onJust handlerM $ \handler -> do
     metrics <- initRefetchMetrics
     threadRef <- A.async $ forever $ do
-      pollQuery metrics batchSize pgExecCtx query handler
+      -- pollQuery metrics batchSize pgExecCtx query handler
+      -- FIXME (anon): undefined
+      undefined
       sleep $ unRefetchInterval refetchInterval
     STM.atomically $ STM.putTMVar (_pIOState handler) (PollerIOState threadRef metrics)
 

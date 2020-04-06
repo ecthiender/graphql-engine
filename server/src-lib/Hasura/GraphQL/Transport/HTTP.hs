@@ -10,6 +10,10 @@ module Hasura.GraphQL.Transport.HTTP
   , GQLQueryText(..)
   ) where
 
+import           Control.Lens                           (( # ))
+
+import qualified Database.PG.Query                      as Q
+import qualified Language.GraphQL.Draft.Syntax          as G
 import qualified Network.HTTP.Types                     as HTTP
 
 import           Hasura.EncJSON
@@ -21,16 +25,15 @@ import           Hasura.Server.Context
 import           Hasura.Server.Utils                    (RequestId)
 import           Hasura.Server.Version                  (HasVersion)
 
-import qualified Database.PG.Query                      as Q
 import qualified Hasura.GraphQL.Execute                 as E
 import qualified Hasura.Logging                         as L
 import qualified Hasura.Server.Telemetry.Counters       as Telem
-import qualified Language.GraphQL.Draft.Syntax          as G
 
 runGQ
   :: ( HasVersion
      , MonadIO m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader E.ExecutionCtx m
      )
   => RequestId
@@ -73,7 +76,9 @@ runGQ reqId userInfo reqHdrs req@(reqUnparsed, _) = do
 runGQBatched
   :: ( HasVersion
      , MonadIO m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     , Show code
      , MonadReader E.ExecutionCtx m
      )
   => RequestId
@@ -99,13 +104,14 @@ runGQBatched reqId userInfo reqHdrs reqs =
 
 runHasuraGQ
   :: ( MonadIO m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader E.ExecutionCtx m
      )
   => RequestId
   -> GQLReqUnparsed
   -> UserInfo
-  -> E.ExecOp
+  -> E.ExecOp code
   -> m (DiffTime, Telem.QueryType, EncJSON)
   -- ^ Also return 'Mutation' when the operation was a mutation, and the time
   -- spent in the PG query; for telemetry.
@@ -121,7 +127,7 @@ runHasuraGQ reqId query userInfo resolvedOp = do
       L.unLogger logger $ QueryLog query Nothing reqId
       runLazyTx pgExecCtx Q.ReadWrite $ withUserInfo userInfo tx
     E.ExOpSubs _ ->
-      throw400 UnexpectedPayload
+      throw400 (_UnexpectedPayload # ())
       "subscriptions are not supported over HTTP, use websockets instead"
   resp <- liftEither respE
   let !json = encodeGQResp $ GQSuccess $ encJToLBS resp

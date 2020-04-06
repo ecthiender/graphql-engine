@@ -47,8 +47,8 @@ newtype FormattedTime
   = FormattedTime { _unFormattedTime :: Text }
   deriving (Show, Eq, J.ToJSON)
 
--- | Typeclass representing any type which can be parsed into a list of enabled log types, and has a @Set@
--- of default enabled log types, and can find out if a log type is enabled
+-- | Typeclass representing any type which can be parsed into a list of enabled log types, and has a
+-- @Set@ of default enabled log types, and can find out if a log type is enabled
 class (Eq (EngineLogType impl), Hashable (EngineLogType impl)) => EnabledLogTypes impl where
   parseEnabledLogTypes :: String -> Either String [EngineLogType impl]
   defaultEnabledLogTypes :: Set.HashSet (EngineLogType impl)
@@ -189,7 +189,6 @@ class EnabledLogTypes impl => ToEngineLog a impl where
 newtype UnstructuredLog
   = UnstructuredLog { _unUnstructuredLog :: TBS.TByteString }
   deriving (Show, Eq)
-
 debugT :: Text -> UnstructuredLog
 debugT = UnstructuredLog . TBS.fromText
 

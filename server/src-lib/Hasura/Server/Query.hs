@@ -159,14 +159,14 @@ $(deriveJSON
   ''RQLQueryV2
  )
 
-fetchLastUpdate :: Q.TxE (QErr code) (Maybe (InstanceId, UTCTime, CacheInvalidations))
+fetchLastUpdate :: AsCodeHasura code => Q.TxE (QErr code) (Maybe (InstanceId, UTCTime, CacheInvalidations))
 fetchLastUpdate = over (_Just._3) Q.getAltJ <$> Q.withQE defaultTxErrorHandler [Q.sql|
   SELECT instance_id::text, occurred_at, invalidations
   FROM hdb_catalog.hdb_schema_update_event
   ORDER BY occurred_at DESC LIMIT 1
   |] () True
 
-recordSchemaUpdate :: InstanceId -> CacheInvalidations -> Q.TxE (QErr code) ()
+recordSchemaUpdate :: AsCodeHasura code => InstanceId -> CacheInvalidations -> Q.TxE (QErr code) ()
 recordSchemaUpdate instanceId invalidations =
   liftTx $ Q.unitQE defaultTxErrorHandler [Q.sql|
              INSERT INTO hdb_catalog.hdb_schema_update_event
@@ -176,10 +176,10 @@ recordSchemaUpdate instanceId invalidations =
             |] (instanceId, Q.AltJ invalidations) True
 
 runQuery
-  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m, AsCodeHasura code)
   => PGExecCtx -> InstanceId
-  -> UserInfo -> RebuildableSchemaCache Run -> HTTP.Manager
-  -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, RebuildableSchemaCache Run)
+  -> UserInfo -> RebuildableSchemaCache (Run code) -> HTTP.Manager
+  -> SQLGenCtx -> SystemDefined -> RQLQuery -> m (EncJSON, RebuildableSchemaCache (Run code))
 runQuery pgExecCtx instanceId userInfo sc hMgr sqlGenCtx systemDefined query = do
   accessMode <- getQueryAccessMode query
   resE <- runQueryM query
@@ -284,11 +284,11 @@ queryModifiesSchemaCache (RQV2 qi) = case qi of
   RQV2SetTableCustomFields _ -> True
   RQV2TrackFunction _        -> True
 
-getQueryAccessMode :: (MonadError (QErr code) m) => RQLQuery -> m Q.TxAccess
+getQueryAccessMode :: (MonadError (QErr code) m, AsCodeHasura code) => RQLQuery -> m Q.TxAccess
 getQueryAccessMode q = (fromMaybe Q.ReadOnly) <$> getQueryAccessMode' q
   where
     getQueryAccessMode' ::
-         (MonadError (QErr code) m) => RQLQuery -> m (Maybe Q.TxAccess)
+         (MonadError (QErr code) m, AsCodeHasura code) => RQLQuery -> m (Maybe Q.TxAccess)
     getQueryAccessMode' (RQV1 q') =
       case q' of
         RQSelect _ -> pure Nothing
@@ -300,7 +300,7 @@ getQueryAccessMode q = (fromMaybe Q.ReadOnly) <$> getQueryAccessMode' q
         reconcileAccessModeWith expectedMode (i, query) = do
           queryMode <- getQueryAccessMode' query
           onLeft (reconcileAccessModes expectedMode queryMode) $ \errMode ->
-            throw400 BadRequest $
+            throw400 (_BadRequest # ()) $
             "incompatible access mode requirements in bulk query, " <>
             "expected access mode: " <>
             (T.pack $ maybe "ANY" show expectedMode) <>
@@ -321,6 +321,7 @@ reconcileAccessModes (Just mode1) (Just mode2)
 
 runQueryM
   :: ( HasVersion, QErrM m code, CacheRWM m, UserInfoM m, MonadTx code m
+     , AsCodeHasura code
      , MonadIO m, HasHttpManager m, HasSQLGenCtx m
      , HasSystemDefined m
      )

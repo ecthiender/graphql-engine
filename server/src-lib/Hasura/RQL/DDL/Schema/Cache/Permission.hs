@@ -65,7 +65,7 @@ mkPermissionMetadataObject (CatalogPermission qt rn pt pDef cmnt) =
   in MetadataObject objectId definition
 
 withPermission
-  :: (ArrowChoice arr, ArrowWriter (Seq CollectedInfo) arr)
+  :: (ArrowChoice arr, ArrowWriter (Seq CollectedInfo) arr, AsCodeHasura code)
   => WriterA (Seq SchemaDependency) (ErrorA (QErr code) arr) (a, s) b
   -> arr (a, (CatalogPermission, s)) (Maybe b)
 withPermission f = proc (e, (permission, s)) -> do

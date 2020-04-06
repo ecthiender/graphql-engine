@@ -45,7 +45,7 @@ import           Hasura.Server.Utils
 -- | Typeclass representing the @UserInfo@ authorization and resolving effect
 class (Monad m) => UserAuthentication m where
   resolveUserInfo
-    :: (HasVersion)
+    :: (HasVersion, AsCodeHasura code)
     => Logger Hasura
     -> H.Manager
     -> [N.Header]
@@ -162,7 +162,7 @@ mkJwtCtx JWTConfig{..} httpManager logger = do
 
 -- | Form the 'UserInfo' from the response from webhook
 mkUserInfoFromResp
-  :: (MonadIO m, MonadError (QErr code) m)
+  :: (MonadIO m, MonadError (QErr code) m, AsCodeHasura code)
   => Logger Hasura
   -> T.Text
   -> N.StdMethod
@@ -203,7 +203,7 @@ mkUserInfoFromResp logger url method statusCode respBody
         url method Nothing $ fmap (bsToTxt . BL.toStrict) mResp
 
 userInfoFromAuthHook
-  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m, AsCodeHasura code)
   => Logger Hasura
   -> H.Manager
   -> AuthHook
@@ -242,7 +242,7 @@ userInfoFromAuthHook logger manager hook reqHeaders = do
       n `notElem` commonClientHeadersIgnored
 
 getUserInfo
-  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m, AsCodeHasura code)
   => Logger Hasura
   -> H.Manager
   -> [N.Header]
@@ -251,7 +251,7 @@ getUserInfo
 getUserInfo l m r a = fst <$> getUserInfoWithExpTime l m r a
 
 getUserInfoWithExpTime
-  :: (HasVersion, MonadIO m, MonadError (QErr code) m)
+  :: (HasVersion, MonadIO m, MonadError (QErr code) m, AsCodeHasura code)
   => Logger Hasura
   -> H.Manager
   -> [N.Header]

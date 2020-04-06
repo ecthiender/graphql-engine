@@ -83,7 +83,7 @@ recordDependencies = proc (metadataObject, schemaObjectId, dependencies) ->
   tellA -< Seq.fromList $ map (CIDependency metadataObject schemaObjectId) dependencies
 
 withRecordInconsistency
-  :: (ArrowChoice arr, ArrowWriter (Seq w) arr, AsInconsistentMetadata w {-, AsCodeHasura code-})
+  :: (ArrowChoice arr, ArrowWriter (Seq w) arr, AsInconsistentMetadata w)
   => ErrorA (QErr code) arr (e, s) a
   -> arr (e, (MetadataObject, s)) (Maybe a)
 withRecordInconsistency f = proc (e, (metadataObject, s)) -> do

@@ -81,7 +81,7 @@ instance J.ToJSON ReusableQueryPlan where
              ]
 
 withPlan
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => UserVars -> PGPlan -> ReusableVariableValues -> m PreparedSql
 withPlan usrVars (PGPlan q reqVars prepMap) annVars = do
   prepMap' <- foldM getVar prepMap (Map.toList reqVars)
@@ -97,10 +97,10 @@ withPlan usrVars (PGPlan q reqVars prepMap) annVars = do
 
 -- turn the current plan into a transaction
 mkCurPlanTx
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => UserVars
   -> FieldPlans
-  -> m (LazyRespTx, GeneratedSqlMap)
+  -> m ((LazyRespTx code), GeneratedSqlMap)
 mkCurPlanTx usrVars fldPlans = do
   -- generate the SQL and prepared vars or the bytestring
   resolved <- forM fldPlans $ \(alias, fldPlan) -> do
@@ -179,7 +179,8 @@ queryRootName :: Text
 queryRootName = "query_root"
 
 convertQuerySelSet
-  :: ( MonadError (QErr a) m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has TypeMap r
      , Has QueryCtxMap r
@@ -190,7 +191,7 @@ convertQuerySelSet
      )
   => QueryReusability
   -> V.SelSet
-  -> m (LazyRespTx, Maybe ReusableQueryPlan, GeneratedSqlMap)
+  -> m ((LazyRespTx code), Maybe ReusableQueryPlan, GeneratedSqlMap)
 convertQuerySelSet initialReusability fields = do
   usrVars <- asks (userVars . getter)
   (fldPlans, finalReusability) <- runReusabilityTWith initialReusability $
@@ -212,11 +213,11 @@ convertQuerySelSet initialReusability fields = do
 
 -- use the existing plan and new variables to create a pg query
 queryOpFromPlan
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => UserVars
   -> Maybe GH.VariableValues
   -> ReusableQueryPlan
-  -> m (LazyRespTx, GeneratedSqlMap)
+  -> m ((LazyRespTx code), GeneratedSqlMap)
 queryOpFromPlan usrVars varValsM (ReusableQueryPlan varTypes fldPlans) = do
   validatedVars <- GV.validateVariablesForReuse varTypes varValsM
   -- generate the SQL and prepared vars or the bytestring
@@ -256,7 +257,7 @@ data ResolvedQuery
 -- prepared statement
 type GeneratedSqlMap = [(G.Alias, Maybe PreparedSql)]
 
-mkLazyRespTx :: [(G.Alias, ResolvedQuery)] -> LazyRespTx
+mkLazyRespTx :: AsCodeHasura code => [(G.Alias, ResolvedQuery)] -> LazyRespTx code
 mkLazyRespTx resolved =
   fmap encJFromAssocList $ forM resolved $ \(alias, node) -> do
     resp <- case node of

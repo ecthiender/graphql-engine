@@ -1,11 +1,12 @@
-{-# LANGUAGE CPP       #-}
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE DataKinds           #-}
 
 module Hasura.Server.App where
 
 import           Control.Concurrent.MVar
 import           Control.Exception                      (IOException, try)
-import           Control.Lens                           (view, _2)
+import           Control.Lens                           (view, ( # ), _2)
 import           Control.Monad.Stateless
 import           Data.Aeson                             hiding (json)
 import           Data.Either                            (isRight)
@@ -62,20 +63,20 @@ import qualified Hasura.Logging                         as L
 import qualified Hasura.Server.PGDump                   as PGD
 
 
-data SchemaCacheRef
+data SchemaCacheRef code
   = SchemaCacheRef
   { _scrLock     :: MVar ()
-  , _scrCache    :: IORef (RebuildableSchemaCache Run, SchemaCacheVer)
+  , _scrCache    :: IORef (RebuildableSchemaCache (Run code), SchemaCacheVer)
   -- an action to run when schemacache changes
   , _scrOnChange :: IO ()
   }
 
-data ServerCtx
+data ServerCtx code
   = ServerCtx
   { scPGExecCtx       :: !PGExecCtx
   , scConnInfo        :: !Q.ConnInfo
   , scLogger          :: !(L.Logger L.Hasura)
-  , scCacheRef        :: !SchemaCacheRef
+  , scCacheRef        :: !(SchemaCacheRef code)
   , scAuthMode        :: !AuthMode
   , scManager         :: !HTTP.Manager
   , scSQLGenCtx       :: !SQLGenCtx
@@ -87,24 +88,36 @@ data ServerCtx
   , scEkgStore        :: !EKG.Store
   }
 
-data HandlerCtx
+data HandlerCtx code
   = HandlerCtx
-  { hcServerCtx       :: !ServerCtx
+  { hcServerCtx       :: !(ServerCtx code)
   , hcUser            :: !UserInfo
   , hcReqHeaders      :: ![HTTP.Header]
   , hcSourceIpAddress :: !IpAddress
   , hcRequestId       :: !RequestId
   }
 
-type Handler m = ExceptT (QErr code) (ReaderT HandlerCtx m)
+type Handler code m = ExceptT (QErr code) (ReaderT (HandlerCtx code) m)
 
 data APIResp
   = JSONResp !(HttpResponse EncJSON)
   | RawResp  !(HttpResponse BL.ByteString)
 
-data APIHandler m a
-  = AHGet !(Handler m APIResp)
-  | AHPost !(a -> Handler m APIResp)
+data APIHandler code m a
+  = AHGet !(Handler code m APIResp)
+  | AHPost !(a -> Handler code m APIResp)
+
+
+-- | Authorization rules to be applied on the metadata (`/v1/query`) API
+class MetadataApiAuthorization m where
+  authorizeMetadataApi :: (HasVersion, AsCodeHasura code) => RQLQuery -> UserInfo -> Handler code m ()
+
+-- | The config API (/v1alpha1/config) handler
+class Monad m => ConfigApiHandler m where
+  runConfigApiHandler :: (HasVersion, AsCodeHasura code, Show code) => ServerCtx code -> Spock.SpockCtxT () m ()
+
+class (Monad m) => ConsoleRenderer m where
+  renderConsole :: HasVersion => T.Text -> AuthMode -> Bool -> Maybe Text -> m (Either String Text)
 
 
 boolToText :: Bool -> T.Text
@@ -114,7 +127,7 @@ isAdminSecretSet :: AuthMode -> T.Text
 isAdminSecretSet AMNoAuth = boolToText False
 isAdminSecretSet _        = boolToText True
 
-getSCFromRef :: (MonadIO m) => SchemaCacheRef -> m SchemaCache
+getSCFromRef :: (MonadIO m) => SchemaCacheRef code -> m SchemaCache
 getSCFromRef scRef = lastBuiltSchemaCache . fst <$> liftIO (readIORef $ _scrCache scRef)
 
 logInconsObjs :: L.Logger L.Hasura -> [InconsistentMetadata] -> IO ()
@@ -123,7 +136,7 @@ logInconsObjs logger objs =
 
 withSCUpdate
   :: (MonadIO m, MonadError e m)
-  => SchemaCacheRef -> L.Logger L.Hasura -> m (a, RebuildableSchemaCache Run) -> m a
+  => SchemaCacheRef code -> L.Logger L.Hasura -> m (a, RebuildableSchemaCache (Run code)) -> m a
 withSCUpdate scr logger action = do
   acquireLock
   (res, newSC) <- action `catchError` onError
@@ -142,44 +155,44 @@ withSCUpdate scr logger action = do
     acquireLock = liftIO $ takeMVar lk
     releaseLock = liftIO $ putMVar lk ()
 
-mkGetHandler :: Handler m APIResp -> APIHandler m ()
+mkGetHandler :: Handler code m APIResp -> APIHandler code m ()
 mkGetHandler = AHGet
 
-mkPostHandler :: (a -> Handler m APIResp) -> APIHandler m a
+mkPostHandler :: (a -> Handler code m APIResp) -> APIHandler code m a
 mkPostHandler = AHPost
 
-mkAPIRespHandler :: (Functor m) => (a -> Handler m (HttpResponse EncJSON)) -> (a -> Handler m APIResp)
+mkAPIRespHandler :: (Functor m) => (a -> Handler code m (HttpResponse EncJSON)) -> (a -> Handler code m APIResp)
 mkAPIRespHandler = (fmap . fmap) JSONResp
 
-isMetadataEnabled :: ServerCtx -> Bool
+isMetadataEnabled :: ServerCtx code -> Bool
 isMetadataEnabled sc = S.member METADATA $ scEnabledAPIs sc
 
-isGraphQLEnabled :: ServerCtx -> Bool
+isGraphQLEnabled :: ServerCtx code -> Bool
 isGraphQLEnabled sc = S.member GRAPHQL $ scEnabledAPIs sc
 
-isPGDumpEnabled :: ServerCtx -> Bool
+isPGDumpEnabled :: ServerCtx code -> Bool
 isPGDumpEnabled sc = S.member PGDUMP $ scEnabledAPIs sc
 
-isConfigEnabled :: ServerCtx -> Bool
+isConfigEnabled :: ServerCtx code -> Bool
 isConfigEnabled sc = S.member CONFIG $ scEnabledAPIs sc
 
-isDeveloperAPIEnabled :: ServerCtx -> Bool
+isDeveloperAPIEnabled :: ServerCtx code -> Bool
 isDeveloperAPIEnabled sc = S.member DEVELOPER $ scEnabledAPIs sc
 
 -- {-# SCC parseBody #-}
-parseBody :: (FromJSON a, MonadError (QErr code) m) => BL.ByteString -> m a
+parseBody :: (FromJSON a, MonadError (QErr code) m, AsCodeHasura code, Show code) => BL.ByteString -> m a
 parseBody reqBody =
   case eitherDecode' reqBody of
-    Left e     -> throw400 InvalidJSON (T.pack e)
+    Left e     -> throw400 (_InvalidJSON # ()) (T.pack e)
     Right jVal -> decodeValue jVal
 
-onlyAdmin :: (Monad m) => Handler m ()
+onlyAdmin :: (Monad m, AsCodeHasura code, Show code) => Handler code m ()
 onlyAdmin = do
   uRole <- asks (userRole . hcUser)
   when (uRole /= adminRole) $
-    throw400 AccessDenied "You have to be an admin to access this endpoint"
+    throw400 (_AccessDenied # ()) "You have to be an admin to access this endpoint"
 
-buildQCtx :: (MonadIO m) => Handler m QCtx
+buildQCtx :: (MonadIO m) => Handler code m QCtx
 buildQCtx = do
   scRef    <- scCacheRef . hcServerCtx <$> ask
   userInfo <- asks hcUser
@@ -187,22 +200,14 @@ buildQCtx = do
   sqlGenCtx <- scSQLGenCtx . hcServerCtx <$> ask
   return $ QCtx userInfo cache sqlGenCtx
 
--- | Authorization rules to be applied on the metadata (`/v1/query`) API
-class MetadataApiAuthorization m where
-  authorizeMetadataApi :: HasVersion => RQLQuery -> UserInfo -> Handler m ()
-
--- | The config API (/v1alpha1/config) handler
-class Monad m => ConfigApiHandler m where
-  runConfigApiHandler :: HasVersion => ServerCtx -> Spock.SpockCtxT () m ()
-
 mkSpockAction
-  :: (HasVersion, MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m)
-  => ServerCtx
+  :: (HasVersion, MonadIO m, FromJSON a, ToJSON a, UserAuthentication m, HttpLog m, AsCodeHasura code, Show code)
+  => ServerCtx code
   -> (Bool -> (QErr code) -> Value)
-  -- ^ `QErr` JSON encoder function
-  -> (QErr -> QErr)
-  -- ^ `QErr` modifier
-  -> APIHandler m a
+  -- ^ 'QErr' JSON encoder function
+  -> (QErr code -> QErr code)
+  -- ^ 'QErr' modifier
+  -> APIHandler code m a
   -> Spock.ActionT m ()
 mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     req <- Spock.request
@@ -239,26 +244,27 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
     -- log and return result
     case modResult of
       Left err  -> let jErr = maybe (Left reqBody) (Right . toJSON) q
-                   in logErrorAndResp (Just userInfo) requestId req jErr (isAdmin curRole) headers err
+                   in (logErrorAndResp (Just userInfo) requestId req jErr (isAdmin curRole) headers err)
       Right res -> logSuccessAndResp (Just userInfo) requestId req (fmap toJSON q) res (Just (ioWaitTime, serviceTime)) headers
 
     where
       logger = scLogger serverCtx
 
       logErrorAndResp
-        :: (MonadIO m, HttpLog m)
+        :: (MonadIO m, HttpLog m, AsCodeHasura code, Show code)
         => Maybe UserInfo
         -> RequestId
         -> Wai.Request
         -> Either BL.ByteString Value
         -> Bool
         -> [HTTP.Header]
-        -> QErr
+        -> QErr code
         -> Spock.ActionCtxT ctx m a
       logErrorAndResp userInfo reqId req reqBody includeInternal headers qErr = do
         lift $ logHttpError logger userInfo reqId req reqBody qErr headers
         Spock.setStatus $ qeStatus qErr
-        Spock.json $ qErrEncoder includeInternal qErr
+        -- FIXME (anon): undefined
+        Spock.json $ qErrEncoder includeInternal undefined --qErr
 
       logSuccessAndResp userInfo reqId req reqBody result qTime reqHeaders =
         case result of
@@ -280,7 +286,9 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
 
       mkHeaders = maybe [] (map unHeader)
 
-v1QueryHandler :: (HasVersion, MonadIO m, MetadataApiAuthorization m) => RQLQuery -> Handler m (HttpResponse EncJSON)
+v1QueryHandler
+  :: (HasVersion, MonadIO m, MetadataApiAuthorization m, AsCodeHasura code, Show code)
+  => RQLQuery -> Handler code m (HttpResponse EncJSON)
 v1QueryHandler query = do
   userInfo <- asks hcUser
   authorizeMetadataApi query userInfo
@@ -302,8 +310,8 @@ v1QueryHandler query = do
       runQuery pgExecCtx instanceId userInfo schemaCache httpMgr sqlGenCtx (SystemDefined False) query
 
 v1Alpha1GQHandler
-  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
-  => GH.GQLBatchedReqs GH.GQLQueryText -> Handler m (HttpResponse EncJSON)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, AsCodeHasura code, Show code)
+  => GH.GQLBatchedReqs GH.GQLQueryText -> Handler code m (HttpResponse EncJSON)
 v1Alpha1GQHandler query = do
   userInfo <- asks hcUser
   reqHeaders <- asks hcReqHeaders
@@ -334,12 +342,12 @@ v1Alpha1GQHandler query = do
   flip runReaderT execCtx $ GH.runGQBatched requestId userInfo reqHeaders (query, reqParsed)
 
 v1GQHandler
-  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m)
+  :: (HasVersion, E.GQLApiAuthorization m, MonadIO m, AsCodeHasura code, Show code)
   => GH.GQLBatchedReqs GH.GQLQueryText
-  -> Handler m (HttpResponse EncJSON)
+  -> Handler code m (HttpResponse EncJSON)
 v1GQHandler = v1Alpha1GQHandler
 
-gqlExplainHandler :: (MonadIO m) => GE.GQLExplain -> Handler m (HttpResponse EncJSON)
+gqlExplainHandler :: (MonadIO m, AsCodeHasura code, Show code) => GE.GQLExplain -> Handler code m (HttpResponse EncJSON)
 gqlExplainHandler query = do
   onlyAdmin
   scRef <- scCacheRef . hcServerCtx <$> ask
@@ -350,7 +358,7 @@ gqlExplainHandler query = do
   res <- GE.explainGQLQuery pgExecCtx sc sqlGenCtx enableAL query
   return $ HttpResponse res Nothing
 
-v1Alpha1PGDumpHandler :: (MonadIO m) => PGD.PGDumpReqBody -> Handler m APIResp
+v1Alpha1PGDumpHandler :: (MonadIO m, AsCodeHasura code, Show code) => PGD.PGDumpReqBody -> Handler code m APIResp
 v1Alpha1PGDumpHandler b = do
   onlyAdmin
   ci <- scConnInfo . hcServerCtx <$> ask
@@ -385,9 +393,6 @@ consoleAssetsHandler logger dir path = do
     mimeType = bsToTxt $ defaultMimeLookup fileName
     headers = ("Content-Type", mimeType) : encHeader
 
-class (Monad m) => ConsoleRenderer m where
-  renderConsole :: HasVersion => T.Text -> AuthMode -> Bool -> Maybe Text -> m (Either String Text)
-
 renderHtmlTemplate :: M.Template -> Value -> Either String Text
 renderHtmlTemplate template jVal =
   bool (Left errMsg) (Right res) $ null errs
@@ -395,11 +400,11 @@ renderHtmlTemplate template jVal =
     errMsg = "template rendering failed: " ++ show errs
     (errs, res) = M.checkedSubstitute template jVal
 
-newtype LegacyQueryParser m
+newtype LegacyQueryParser code m
   = LegacyQueryParser
-  { getLegacyQueryParser :: QualifiedTable -> Object -> Handler m RQLQueryV1 }
+  { getLegacyQueryParser :: QualifiedTable -> Object -> Handler code m RQLQueryV1 }
 
-queryParsers :: (Monad m) => M.HashMap T.Text (LegacyQueryParser m)
+queryParsers :: (Monad m, AsCodeHasura code) => M.HashMap T.Text (LegacyQueryParser code m)
 queryParsers =
   M.fromList
   [ ("select", mkLegacyQueryParser RQSelect)
@@ -416,9 +421,9 @@ queryParsers =
       return $ f q
 
 legacyQueryHandler
-  :: (HasVersion, MonadIO m, MetadataApiAuthorization m)
+  :: (HasVersion, MonadIO m, MetadataApiAuthorization m, AsCodeHasura code, Show code)
   => TableName -> T.Text -> Object
-  -> Handler m (HttpResponse EncJSON)
+  -> Handler code m (HttpResponse EncJSON)
 legacyQueryHandler tn queryType req =
   case M.lookup queryType queryParsers of
     Just queryParser -> getLegacyQueryParser queryParser qt req >>= v1QueryHandler . RQV1
@@ -427,8 +432,8 @@ legacyQueryHandler tn queryType req =
     qt = QualifiedObject publicSchema tn
 
 configApiGetHandler
-  :: (HasVersion, MonadIO m, UserAuthentication m, HttpLog m)
-  => ServerCtx -> Spock.SpockCtxT () m ()
+  :: (HasVersion, MonadIO m, UserAuthentication m, HttpLog m, AsCodeHasura code, Show code)
+  => ServerCtx code -> Spock.SpockCtxT () m ()
 configApiGetHandler serverCtx =
   Spock.get "v1alpha1/config" $ mkSpockAction serverCtx encodeQErr id $
     mkGetHandler $ do
@@ -436,23 +441,23 @@ configApiGetHandler serverCtx =
       let res = encJFromJValue $ runGetConfig (scAuthMode serverCtx)
       return $ JSONResp $ HttpResponse res Nothing
 
-initErrExit :: (QErr code) -> IO a
+initErrExit :: Show code => (QErr code) -> IO a
 initErrExit e = do
   putStrLn $
     "failed to build schema-cache because of inconsistent metadata: "
     <> (show e)
   exitFailure
 
-data HasuraApp
+data HasuraApp code
   = HasuraApp
   { _hapApplication    :: !Wai.Application
-  , _hapSchemaRef      :: !SchemaCacheRef
+  , _hapSchemaRef      :: !(SchemaCacheRef code)
   , _hapCacheBuildTime :: !(Maybe UTCTime)
   , _hapShutdown       :: !(IO ())
   }
 
 mkWaiApp
-  :: forall m.
+  :: forall code m.
      ( HasVersion
      , MonadIO m
      , MonadStateless IO m
@@ -463,6 +468,8 @@ mkWaiApp
      , E.GQLApiAuthorization m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
+     , AsCodeHasura code
+     , Show code
      )
   => Q.TxIsolation
   -- ^ postgres transaction isolation to be used in the entire app
@@ -493,7 +500,7 @@ mkWaiApp
   -- ^ set of the enabled 'API's
   -> EL.LiveQueriesOptions
   -> E.PlanCacheOptions
-  -> m HasuraApp
+  -> m (HasuraApp code)
 mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions = do
 
@@ -545,7 +552,8 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
       Spock.spockAsApp $ Spock.spockT lowerIO $
         httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry
 
-    let wsServerApp = WS.createWSServerApp mode wsServerEnv
+    -- FIXME(anon): undefined
+    let wsServerApp = undefined --WS.createWSServerApp mode wsServerEnv
         stopWSServer = WS.stopWSServerApp wsServerEnv
 
     waiApp <- liftWithStateless $ \lowerIO ->
@@ -558,7 +566,8 @@ mkWaiApp isoLevel logger sqlGenCtx enableAL pool ci httpManager mode corsCfg ena
 
 
 httpApp
-  :: ( HasVersion
+  :: forall code m.
+     ( HasVersion
      , MonadIO m
      , ConsoleRenderer m
      , HttpLog m
@@ -566,9 +575,11 @@ httpApp
      , MetadataApiAuthorization m
      , E.GQLApiAuthorization m
      , ConfigApiHandler m
+     , AsCodeHasura code
+     , Show code
      )
   => CorsConfig
-  -> ServerCtx
+  -> ServerCtx code
   -> Bool
   -> Maybe Text
   -> Bool
@@ -655,10 +666,9 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
     logger = scLogger serverCtx
 
     spockAction
-      :: (FromJSON a, ToJSON a, MonadIO m, UserAuthentication m, HttpLog m)
-      => (Bool -> (QErr code) -> Value) -> (QErr -> QErr) -> APIHandler m a -> Spock.ActionT m ()
+      :: (FromJSON a, ToJSON a)
+      => (Bool -> (QErr code) -> Value) -> (QErr code -> QErr code) -> APIHandler code m a -> Spock.ActionT m ()
     spockAction = mkSpockAction serverCtx
-
 
     -- all graphql errors should be of type 200
     allMod200 qe = qe { qeStatus = HTTP.status200 }
@@ -676,7 +686,7 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
       e <- liftIO $ runExceptT $ runLazyTx' (scPGExecCtx serverCtx) select1Query
       pure $ isRight e
       where
-        select1Query :: (MonadTx code m) => m Int
+        select1Query :: (AsCodeHasura code) => LazyTx (QErr code) Int
         select1Query =   liftTx $ runIdentity . Q.getRow <$> Q.withQE defaultTxErrorHandler
                          [Q.sql| SELECT 1 |] () False
 
@@ -695,13 +705,15 @@ httpApp corsCfg serverCtx enableConsole consoleAssetsDir enableTelemetry = do
         let headers = Wai.requestHeaders req
         let authMode = scAuthMode serverCtx
         consoleHtml <- lift $ renderConsole path authMode enableTelemetry consoleAssetsDir
-        either (raiseGenericApiError logger headers . err500 Unexpected . T.pack) Spock.html consoleHtml
+        case consoleHtml of
+          Left e -> raiseGenericApiError logger headers (err500 (_Unexpected # ()) (T.pack e) :: QErr CodeHasura)
+          Right html -> Spock.html html
 
 raiseGenericApiError
-  :: (MonadIO m, HttpLog m)
+  :: (MonadIO m, HttpLog m, Show code)
   => L.Logger L.Hasura
   -> [HTTP.Header]
-  -> QErr
+  -> QErr code
   -> Spock.ActionT m ()
 raiseGenericApiError logger headers qErr = do
   req <- Spock.request

@@ -12,6 +12,7 @@ import qualified Data.HashSet                       as HS
 import qualified Data.Sequence                      as Seq
 import qualified Language.GraphQL.Draft.Syntax      as G
 
+import Control.Lens ((#))
 import           Control.Arrow.Extended
 import           Data.Aeson
 
@@ -26,7 +27,8 @@ import           Hasura.RQL.Types.Catalog
 import           Hasura.SQL.Types
 
 addNonColumnFields
-  :: ( ArrowChoice arr, Inc.ArrowDistribute arr, ArrowWriter (Seq CollectedInfo) arr
+  :: forall arr m code.
+     ( ArrowChoice arr, Inc.ArrowDistribute arr, ArrowWriter (Seq CollectedInfo) arr
      , ArrowKleisli m arr, MonadError (QErr code) m, AsCodeHasura code)
   => ( HashMap QualifiedTable TableRawInfo
      , FieldInfoMap PGColumnInfo
@@ -108,20 +110,22 @@ buildRelationship = proc (foreignKeys, relationship) -> do
       metadataObject = mkRelationshipMetadataObject relationship
       schemaObject = SOTableObj tableName $ TORel rn
       addRelationshipContext e = "in relationship " <> rn <<> ": " <> e
-  (| withRecordInconsistency (
-     (| modifyErrA (do
-          (info, dependencies) <- liftEitherA -< case rt of
-            ObjRel -> do
-              using <- decodeValue rDef
-              tableForeignKeys <- getTableInfo tableName foreignKeys
-              objRelP2Setup tableName tableForeignKeys (RelDef rn using Nothing)
-            ArrRel -> do
-              using <- decodeValue rDef
-              arrRelP2Setup foreignKeys tableName (RelDef rn using Nothing)
-          recordDependencies -< (metadataObject, schemaObject, dependencies)
-          returnA -< info)
-     |) (addTableContext tableName . addRelationshipContext))
-   |) metadataObject
+  -- FIXME(anon): undefined
+  returnA -< undefined
+  -- (| withRecordInconsistency (
+  --    (| modifyErrA (do
+  --         (info, dependencies) <- liftEitherA -< case rt of
+  --           ObjRel -> do
+  --             using <- decodeValue rDef
+  --             tableForeignKeys <- getTableInfo tableName foreignKeys
+  --             objRelP2Setup tableName tableForeignKeys (RelDef rn using Nothing)
+  --           ArrRel -> do
+  --             using <- decodeValue rDef
+  --             arrRelP2Setup foreignKeys tableName (RelDef rn using Nothing)
+  --         recordDependencies -< (metadataObject, schemaObject, dependencies)
+  --         returnA -< info)
+  --    |) (addTableContext tableName . addRelationshipContext))
+  --  |) metadataObject
 
 mkComputedFieldMetadataObject :: CatalogComputedField -> MetadataObject
 mkComputedFieldMetadataObject (CatalogComputedField column _) =

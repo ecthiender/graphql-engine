@@ -12,7 +12,7 @@ module Hasura.Server.Auth.JWT
   ) where
 
 import           Control.Exception               (try)
-import           Control.Lens
+import           Control.Lens                    (set, ( # ), (^.), (^?))
 import           Control.Monad                   (when)
 import           Data.IORef                      (IORef, readIORef, writeIORef)
 import           Data.List                       (find)
@@ -205,7 +205,9 @@ updateJwkRef (Logger logger) manager url jwkRef = do
 -- | Process the request headers to verify the JWT and extract UserInfo from it
 processJwt
   :: ( MonadIO m
-     , MonadError (QErr code) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => JWTCtx
   -> HTTP.RequestHeaders
   -> Maybe RoleName
@@ -224,11 +226,13 @@ processJwt jwtCtx headers mUnAuthRole =
         mkUserInfo unAuthRole $ mkUserVars $ hdrsToText headers
 
     missingAuthzHeader =
-      throw400 InvalidHeaders "Missing Authorization header in JWT authentication mode"
+      throw400 (_InvalidHeaders # ()) "Missing Authorization header in JWT authentication mode"
 
 processAuthZHeader
   :: ( MonadIO m
-     , MonadError (QErr code) m)
+     , MonadError (QErr code) m
+     , AsCodeHasura code
+     )
   => JWTCtx
   -> HTTP.RequestHeaders
   -> BLC.ByteString
@@ -290,7 +294,7 @@ processAuthZHeader jwtCtx headers authzHeader = do
                    <> fromMaybe defaultClaimNs (jcxClaimNs jwtCtx)
                    <> "', but found: " <> v
 
-    claimsErr = throw400 JWTInvalidClaims
+    claimsErr = throw400 (_JWTInvalidClaims # ())
 
     -- see if there is a x-hasura-role header, or else pick the default role
     getCurrentRole defaultRole =
@@ -299,7 +303,7 @@ processAuthZHeader jwtCtx headers authzHeader = do
       in maybe defaultRole RoleName $ mUserRole >>= mkNonEmptyText . bsToTxt
 
     decodeJSON val = case J.fromJSON val of
-      J.Error e   -> throw400 JWTInvalidClaims ("x-hasura-* claims: " <> T.pack e)
+      J.Error e   -> throw400 (_JWTInvalidClaims # ()) ("x-hasura-* claims: " <> T.pack e)
       J.Success a -> return a
 
     liftJWTError :: (MonadError e' m) => (e -> e') -> ExceptT e m a -> m a
@@ -308,20 +312,20 @@ processAuthZHeader jwtCtx headers authzHeader = do
       either (throwError . ef) return res
 
     invalidJWTError e =
-      err400 JWTInvalid $ "Could not verify JWT: " <> T.pack (show e)
+      err400 (_JWTInvalid # ()) $ "Could not verify JWT: " <> T.pack (show e)
 
     malformedAuthzHeader =
-      throw400 InvalidHeaders "Malformed Authorization header"
+      throw400 (_InvalidHeaders # ()) "Malformed Authorization header"
     currRoleNotAllowed =
-      throw400 AccessDenied "Your current role is not in allowed roles"
+      throw400 (_AccessDenied # ()) "Your current role is not in allowed roles"
     claimsNotFound = do
       let claimsNs = fromMaybe defaultClaimNs $ jcxClaimNs jwtCtx
-      throw400 JWTInvalidClaims $ "claims key: '" <> claimsNs <> "' not found"
+      throw400 (_JWTInvalidClaims # ()) $ "claims key: '" <> claimsNs <> "' not found"
 
 
 -- parse x-hasura-allowed-roles, x-hasura-default-role from JWT claims
 parseHasuraClaims
-  :: (MonadError (QErr code) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => J.Object -> m HasuraClaims
 parseHasuraClaims claimsMap = do
   let mAllowedRolesV = Map.lookup allowedRolesClaim claimsMap
@@ -337,19 +341,19 @@ parseHasuraClaims claimsMap = do
   where
     missingAllowedRolesClaim =
       let msg = "JWT claim does not contain " <> allowedRolesClaim
-      in throw400 JWTRoleClaimMissing msg
+      in throw400 (_JWTRoleClaimMissing # ()) msg
 
     missingDefaultRoleClaim =
       let msg = "JWT claim does not contain " <> defaultRoleClaim
-      in throw400 JWTRoleClaimMissing msg
+      in throw400 (_JWTRoleClaimMissing # ()) msg
 
     errMsg _ = "invalid " <> allowedRolesClaim <> "; should be a list of roles"
 
-    parseJwtClaim :: (MonadError (QErr code) m) => J.Result a -> (String -> Text) -> m a
+    parseJwtClaim :: (MonadError (QErr code) m, AsCodeHasura code) => J.Result a -> (String -> Text) -> m a
     parseJwtClaim res errFn =
       case res of
         J.Success val -> return val
-        J.Error e     -> throw400 JWTInvalidClaims $ errFn e
+        J.Error e     -> throw400 (_JWTInvalidClaims # ()) $ errFn e
 
 
 -- | Verify the JWT against given JWK

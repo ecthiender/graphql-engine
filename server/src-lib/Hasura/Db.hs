@@ -176,15 +176,11 @@ instance MonadError e (LazyTx e) where
   LTTx txe `catchError` f =
     LTTx $ txe `catchError` (lazyTxToQTx . f)
 
--- instance MonadError (QErr code) m where
---   throwError = undefined
---   catchError = undefined
+instance MonadTx code (LazyTx (QErr code)) where
+  liftTx = LTTx
 
--- instance (forall code. MonadTx (LazyTx (QErr code))) where
---   liftTx = LTTx
-
--- instance MonadTx (Q.TxE (QErr code)) where
---   liftTx = id
+instance MonadTx code (Q.TxE (QErr code)) where
+  liftTx = id
 
 instance MonadIO (LazyTx e) where
   liftIO = LTTx . liftIO

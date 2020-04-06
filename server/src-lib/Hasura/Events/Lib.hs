@@ -27,6 +27,7 @@ import           Hasura.RQL.Types
 import           Hasura.Server.Version         (HasVersion)
 import           Hasura.SQL.Types
 
+
 import qualified Control.Concurrent.STM.TQueue as TQ
 import qualified Data.ByteString               as BS
 import qualified Data.CaseInsensitive          as CI
@@ -198,38 +199,44 @@ consumeEvents logger logenv httpMgr pool getSchemaCache eectx  = forever $ do
   async $ runReaderT (processEvent logenv pool getSchemaCache event) (logger, httpMgr, eectx)
 
 processEvent
-  :: forall code r m.
-     ( HasVersion
+  :: ( HasVersion
      , MonadReader r m
      , Has HTTP.Manager r
      , Has (L.Logger L.Hasura) r
      , Has EventEngineCtx r
      , MonadIO m
-     , AsCodeHasura code
-     , Show code
      )
   => LogEnvHeaders -> Q.PGPool -> IO SchemaCache -> Event -> m ()
 processEvent logenv pool getSchemaCache e = do
   cache <- liftIO getSchemaCache
   let meti = getEventTriggerInfoFromEvent cache e
-  case meti of
-    Nothing -> do
-      logQErr $ err500 (_Unexpected # ()) "table or event-trigger not found in schema cache"
-    Just eti -> do
-      let webhook = T.unpack $ wciCachedValue $ etiWebhookInfo eti
-          retryConf = etiRetryConf eti
-          timeoutSeconds = fromMaybe defaultTimeoutSeconds (rcTimeoutSec retryConf)
-          responseTimeout = HTTP.responseTimeoutMicro (timeoutSeconds * 1000000)
-          headerInfos = etiHeaders eti
-          etHeaders = map encodeHeader headerInfos
-          headers = addDefaultHeaders etHeaders
-          ep = createEventPayload retryConf e
-      res <- runExceptT $ tryWebhook headers responseTimeout ep webhook
-      let decodedHeaders = map (decodeHeader logenv headerInfos) headers
-      finally <- either
-        (processError pool e retryConf decodedHeaders ep)
-        (processSuccess pool e decodedHeaders ep) res
-      either logQErr return finally
+  -- FIXME(anon): undefined
+  -- undefined
+  wrapperfunc meti
+  where
+    wrapperfunc
+      :: (MonadIO m, MonadReader r m, Has (L.Logger L.Hasura) r, Has EventEngineCtx r, Has HTTP.Manager r)
+      => Maybe EventTriggerInfo -> m ()
+    wrapperfunc meti = case meti of
+      Nothing -> do
+        logQErr $ err500 (_Unexpected # ()) "table or event-trigger not found in schema cache"
+      Just eti -> do
+        let webhook = T.unpack $ wciCachedValue $ etiWebhookInfo eti
+            retryConf = etiRetryConf eti
+            timeoutSeconds = fromMaybe defaultTimeoutSeconds (rcTimeoutSec retryConf)
+            responseTimeout = HTTP.responseTimeoutMicro (timeoutSeconds * 1000000)
+            headerInfos = etiHeaders eti
+            etHeaders = map encodeHeader headerInfos
+            headers = addDefaultHeaders etHeaders
+            ep = createEventPayload retryConf e
+        res <- runExceptT $ tryWebhook headers responseTimeout ep webhook
+        let decodedHeaders = map (decodeHeader logenv headerInfos) headers
+        finally <- either
+          (processError pool e retryConf decodedHeaders ep)
+          (processSuccess pool e decodedHeaders ep) res
+        -- either logQErr return finally
+        return ()
+
 
 createEventPayload :: RetryConf -> Event ->  EventPayload
 createEventPayload retryConf e = EventPayload
@@ -245,7 +252,7 @@ createEventPayload retryConf e = EventPayload
     }
 
 processSuccess
-  :: ( MonadIO m )
+  :: ( MonadIO m, AsCodeHasura code )
   => Q.PGPool -> Event -> [HeaderConf] -> EventPayload -> HTTPResp
   -> m (Either (QErr code) ())
 processSuccess pool e decodedHeaders ep resp = do

@@ -161,11 +161,11 @@ instance Q.ToPrepArg CohortVariablesArray where
       encoder = PE.array 114 . PE.dimensionArray foldl' (PE.encodingArray . PE.json_ast)
 
 executeMultiplexedQuery
-  :: (MonadTx code m) => MultiplexedQuery -> [(CohortId, CohortVariables)] -> m [(CohortId, EncJSON)]
+  :: (MonadTx code m, AsCodeHasura code) => MultiplexedQuery -> [(CohortId, CohortVariables)] -> m [(CohortId, EncJSON)]
 executeMultiplexedQuery (MultiplexedQuery query) = executeQuery query
 
 -- | Internal; used by both 'executeMultiplexedQuery' and 'explainLiveQueryPlan'.
-executeQuery :: (MonadTx code m, Q.FromRow a) => Q.Query -> [(CohortId, CohortVariables)] -> m [a]
+executeQuery :: (MonadTx code m, AsCodeHasura code, Q.FromRow a) => Q.Query -> [(CohortId, CohortVariables)] -> m [a]
 executeQuery query cohorts =
   let (cohortIds, cohortVars) = unzip cohorts
       preparedArgs = (CohortIdArray cohortIds, CohortVariablesArray cohortVars)
@@ -194,7 +194,7 @@ type ValidatedSyntheticVariables = ValidatedVariables []
 -- | Checks if the provided arguments are valid values for their corresponding types.
 -- Generates SQL of the format "select 'v1'::t1, 'v2'::t2 ..."
 validateVariables
-  :: (Traversable f, MonadError (QErr a) m, MonadIO m)
+  :: (Traversable f, MonadError (QErr code) m, AsCodeHasura code, MonadIO m)
   => PGExecCtx
   -> f (WithScalarType PGScalarValue)
   -> m (ValidatedVariables f)
@@ -245,7 +245,8 @@ $(J.deriveToJSON (J.aesonDrop 4 J.snakeCase) ''ReusableLiveQueryPlan)
 -- | Constructs a new execution plan for a live query and returns a reusable version of the plan if
 -- possible.
 buildLiveQueryPlan
-  :: ( MonadError (QErr a) m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has UserInfo r
      , MonadIO m
@@ -275,7 +276,7 @@ buildLiveQueryPlan pgExecCtx fieldAlias astUnresolved varTypes = do
   pure (plan, reusablePlan)
 
 reuseLiveQueryPlan
-  :: (MonadError (QErr a) m, MonadIO m)
+  :: (MonadError (QErr code) m, AsCodeHasura code, MonadIO m)
   => PGExecCtx
   -> UserVars
   -> Maybe GH.VariableValues
@@ -294,7 +295,8 @@ data LiveQueryPlanExplanation
   } deriving (Show)
 $(J.deriveToJSON (J.aesonDrop 5 J.snakeCase) ''LiveQueryPlanExplanation)
 
-explainLiveQueryPlan :: (MonadTx code m, MonadIO m) => LiveQueryPlan -> m LiveQueryPlanExplanation
+explainLiveQueryPlan
+  :: (MonadTx code m, AsCodeHasura code, MonadIO m) => LiveQueryPlan -> m LiveQueryPlanExplanation
 explainLiveQueryPlan plan = do
   let parameterizedPlan = _lqpParameterizedPlan plan
       queryText = Q.getQueryText . unMultiplexedQuery $ _plqpQuery parameterizedPlan

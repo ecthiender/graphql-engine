@@ -25,8 +25,8 @@ import qualified Hasura.Logging                   as L
 
 import           Hasura.Db
 import           Hasura.Prelude
-import           Hasura.RQL.Types                 (QErr, RoleName (..), SchemaCache (..),
-                                                   mkNonEmptyText)
+import           Hasura.RQL.Types                 (AsCodeHasura, QErr, RoleName (..),
+                                                   SchemaCache (..), mkNonEmptyText)
 import           Hasura.Server.Auth
 import           Hasura.Server.Cors
 import           Hasura.Server.Logging
@@ -37,7 +37,7 @@ newtype DbUid
   = DbUid { getDbUid :: Text }
   deriving (Show, Eq, J.ToJSON, J.FromJSON)
 
-getDbId :: Q.TxE (QErr code) Text
+getDbId :: AsCodeHasura code => Q.TxE (QErr code) Text
 getDbId =
   (runIdentity . Q.getRow) <$>
   Q.withQE defaultTxErrorHandler

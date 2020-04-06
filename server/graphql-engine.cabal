@@ -1,7 +1,7 @@
 cabal-version:       2.2
 
 name:                graphql-engine
-version:             1.0.0
+version:             1.2.0
 synopsis:            GraphQL API over Postgres
 homepage:            https://www.hasura.io
 license:             Apache-2.0

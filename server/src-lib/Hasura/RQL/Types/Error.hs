@@ -66,6 +66,11 @@ import qualified Network.HTTP.Types     as N
 
 -- data Hasura
 
+data ProCode
+ = Hasura CodeHasura
+ | Pro Errors
+
+makeClassyPrisms ''ProCode
 
 -- | Various error codes used throughout the application
 data CodeHasura
@@ -193,7 +198,7 @@ instance Show code => ToJSON (QErr code) where
     , "internal" .= ie
     ]
 
-noInternalQErrEnc :: Show a => QErr a -> Value
+noInternalQErrEnc :: Show code => QErr code -> Value
 noInternalQErrEnc (QErr jPath _ msg code _) =
   object
   [ "path"  .= encodeJSONPath jPath
@@ -201,7 +206,7 @@ noInternalQErrEnc (QErr jPath _ msg code _) =
   , "code"  .= show code
   ]
 
-encodeGQLErr :: Show a => Bool -> QErr a -> Value
+encodeGQLErr :: Show code => Bool -> QErr code -> Value
 encodeGQLErr includeInternal (QErr jPath _ msg code mIE) =
   object
   [ "message" .= msg
@@ -216,7 +221,7 @@ encodeGQLErr includeInternal (QErr jPath _ msg code mIE) =
     internal = maybe [] (\ie -> ["internal" .= ie]) mIE
 
 -- whether internal should be included or not
-encodeQErr :: Show a => Bool -> QErr a -> Value
+encodeQErr :: Show code => Bool -> QErr code -> Value
 encodeQErr True = toJSON
 encodeQErr _    = noInternalQErrEnc
 
@@ -286,7 +291,7 @@ modifyErrA :: (ArrowError (QErr code) arr) => arr (e, s) a -> arr (e, (Text -> T
 modifyErrA f = proc (e, (g, s)) -> (| mapErrorA (f -< (e, s)) |) (liftTxtMod g)
 
 liftTxtMod :: (Text -> Text) -> QErr code -> QErr code
-liftTxtMod f (QErr path st s c i) = QErr path st (f s) c i
+liftTxtMod f qe = qe { qeError = f (qeError qe) }
 
 modifyErrAndSet500 :: (QErrM m code) => (Text -> Text) -> m a -> m a
 modifyErrAndSet500 f = modifyQErr (liftTxtMod500 f)
@@ -349,7 +354,7 @@ indexedForM = flip indexedMapM
 
 liftIResult :: (QErrM m code, AsCodeHasura code) => IResult a -> m a
 liftIResult (IError path msg) =
-  throwError $ QErr path N.status400 (T.pack $ formatMsg msg) (review _ParseFailed ()) Nothing
+  throwError $ QErr path N.status400 (T.pack $ formatMsg msg) (_ParseFailed # ()) Nothing
 liftIResult (ISuccess a) =
   return a
 

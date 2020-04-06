@@ -10,6 +10,7 @@ import           Hasura.Prelude
 import           Hasura.RQL.DDL.Metadata    (fetchMetadata)
 import           Hasura.RQL.DDL.Schema
 import           Hasura.RQL.Types
+import           Hasura.RQL.Types.Error     (CodeHasura (..))
 import           Hasura.Server.Init
 import           Hasura.Server.Migrate      (downgradeCatalog, dropCatalog)
 import           Hasura.Server.Version
@@ -31,12 +32,12 @@ runApp (HGEOptionsG rci hgeCmd) =
     HCExport -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx fetchMetadata
-      either printErrJExit printJSON res
+      either (printErrJExit :: QErr CodeHasura -> AppM ()) printJSON res
 
     HCClean -> do
       (initCtx, _) <- initialiseCtx hgeCmd rci
       res <- runTx' initCtx dropCatalog
-      either printErrJExit (const cleanSuccess) res
+      either (printErrJExit :: QErr CodeHasura -> AppM ()) (const cleanSuccess) res
 
     HCExecute -> do
       (InitCtx{..}, _) <- initialiseCtx hgeCmd rci
@@ -48,14 +49,14 @@ runApp (HGEOptionsG rci hgeCmd) =
           & runHasSystemDefinedT (SystemDefined False)
           & runCacheRWT schemaCache
           & fmap (\(res, _, _) -> res)
-      either printErrJExit (liftIO . BLC.putStrLn) res
+      either (printErrJExit :: QErr CodeHasura -> AppM ()) (liftIO . BLC.putStrLn) res
 
     HCDowngrade opts -> do
       (InitCtx{..}, initTime) <- initialiseCtx hgeCmd rci
       let sqlGenCtx = SQLGenCtx False
       res <- downgradeCatalog opts initTime
              & runAsAdmin _icPgPool sqlGenCtx _icHttpManager
-      either printErrJExit (liftIO . print) res
+      either (printErrJExit :: QErr CodeHasura -> AppM ()) (liftIO . print) res
 
     HCVersion -> liftIO $ putStrLn $ "Hasura GraphQL Engine: " ++ convertText currentVersion
   where

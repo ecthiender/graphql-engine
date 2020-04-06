@@ -41,7 +41,7 @@ import qualified Hasura.RQL.DDL.QueryCollection     as Collection
 import qualified Hasura.RQL.DDL.Relationship        as Relationship
 import qualified Hasura.RQL.DDL.Schema              as Schema
 
-clearMetadata :: Q.TxE (QErr code) ()
+clearMetadata :: AsCodeHasura code => Q.TxE (QErr code) ()
 clearMetadata = Q.catchE defaultTxErrorHandler $ do
   Q.unitQ "DELETE FROM hdb_catalog.hdb_function WHERE is_system_defined <> 'true'" () False
   Q.unitQ "DELETE FROM hdb_catalog.hdb_permission WHERE is_system_defined <> 'true'" () False
@@ -57,7 +57,7 @@ clearMetadata = Q.catchE defaultTxErrorHandler $ do
   Q.unitQ "DELETE FROM hdb_catalog.hdb_action WHERE is_system_defined <> 'true'" () False
 
 runClearMetadata
-  :: (MonadTx code m, CacheRWM m)
+  :: (MonadTx code m, AsCodeHasura code, CacheRWM m)
   => ClearMetadata -> m EncJSON
 runClearMetadata _ = do
   liftTx clearMetadata
@@ -65,7 +65,7 @@ runClearMetadata _ = do
   return successMsg
 
 applyQP1
-  :: (QErrM m code)
+  :: (QErrM m code, AsCodeHasura code)
   => ReplaceMetadata -> m ()
 applyQP1 (ReplaceMetadata _ tables functionsMeta schemas collections
           allowlist _ actions) = do
@@ -118,7 +118,7 @@ applyQP1 (ReplaceMetadata _ tables functionsMeta schemas collections
     checkMultipleDecls t l = do
       let dups = getDups l
       unless (null dups) $
-        throw400 AlreadyExists $ "multiple declarations exist for the following " <> t <> " : "
+        throw400 (_AlreadyExists # ()) $ "multiple declarations exist for the following " <> t <> " : "
         <> T.pack (show dups)
 
     getDups l =
@@ -128,6 +128,7 @@ applyQP2
   :: ( HasVersion
      , MonadIO m
      , MonadTx code m
+     , AsCodeHasura code
      , CacheRWM m
      , HasSystemDefined m
      , HasHttpManager m
@@ -223,6 +224,7 @@ runReplaceMetadata
   :: ( HasVersion
      , MonadIO m
      , MonadTx code m
+     , AsCodeHasura code
      , CacheRWM m
      , HasSystemDefined m
      , HasHttpManager m
@@ -232,7 +234,7 @@ runReplaceMetadata q = do
   applyQP1 q
   applyQP2 q
 
-fetchMetadata :: Q.TxE (QErr code) ReplaceMetadata
+fetchMetadata :: AsCodeHasura code => Q.TxE (QErr code) ReplaceMetadata
 fetchMetadata = do
   tables <- Q.catchE defaultTxErrorHandler fetchTables
   let tableMetaMap = HMIns.fromList . flip map tables $
@@ -389,7 +391,7 @@ fetchMetadata = do
                           , ComputedFieldMeta name definition comment
                           )
 
-    fetchCustomTypes :: Q.TxE (QErr code) CustomTypes
+    fetchCustomTypes :: AsCodeHasura code => Q.TxE (QErr code) CustomTypes
     fetchCustomTypes =
       Q.getAltJ . runIdentity . Q.getRow <$>
       Q.rawQE defaultTxErrorHandler [Q.sql|
@@ -430,7 +432,7 @@ fetchMetadata = do
                             |] [] False
 
 runExportMetadata
-  :: (QErrM m code, MonadTx code m)
+  :: (QErrM m code, MonadTx code m, AsCodeHasura code)
   => ExportMetadata -> m EncJSON
 runExportMetadata _ =
   (AO.toEncJSON . replaceMetadataToOrdJSON) <$> liftTx fetchMetadata
@@ -458,7 +460,7 @@ runGetInconsistentMetadata _ = do
                 ]
 
 runDropInconsistentMetadata
-  :: (QErrM m code, CacheRWM m, MonadTx code m)
+  :: (QErrM m code, CacheRWM m, MonadTx code m, AsCodeHasura code)
   => DropInconsistentMetadata -> m EncJSON
 runDropInconsistentMetadata _ = do
   sc <- askSchemaCache
@@ -471,7 +473,7 @@ runDropInconsistentMetadata _ = do
   buildSchemaCacheStrict
   return successMsg
 
-purgeMetadataObj :: MonadTx code m => MetadataObjId -> m ()
+purgeMetadataObj :: (MonadTx code m, AsCodeHasura code) => MetadataObjId -> m ()
 purgeMetadataObj = liftTx . \case
   MOTable qt                            -> Schema.deleteTableFromCatalog qt
   MOFunction qf                         -> Schema.delFunctionFromCatalog qf

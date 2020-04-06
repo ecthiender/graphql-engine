@@ -89,23 +89,24 @@ data ExecutionCtx
 -- this is applicable on other general things
 class Monad m => GQLApiAuthorization m where
   authorizeGQLApi
-    :: UserInfo
+    :: AsCodeHasura code
+    => UserInfo
     -> ([HTTP.Header], IpAddress)
     -- ^ request headers and IP address
     -> GQLReqUnparsed
     -- ^ the unparsed GraphQL query string (and related values)
-    -> m (Either (QErr a) GQLReqParsed)
+    -> m (Either (QErr code) GQLReqParsed)
     -- ^ after enforcing authorization, it should return the parsed GraphQL query
 
 -- Enforces the current limitation
 assertSameLocationNodes
-  :: (MonadError (QErr a) m) => [VT.TypeLoc] -> m VT.TypeLoc
+  :: (MonadError (QErr code) m, AsCodeHasura code) => [VT.TypeLoc] -> m VT.TypeLoc
 assertSameLocationNodes typeLocs =
   case Set.toList (Set.fromList typeLocs) of
     -- this shouldn't happen
     []    -> return VT.TLHasuraType
     [loc] -> return loc
-    _     -> throw400 NotSupported msg
+    _     -> throw400 (_NotSupported # ()) msg
   where
     msg = "cannot mix top level fields from two different graphql servers"
 
@@ -134,7 +135,7 @@ gatherTypeLocs gCtx nodes =
 type ExecPlanPartial = GQExecPlan (GCtx, VQ.RootSelSet)
 
 getExecPlanPartial
-  :: (MonadReusability m, MonadError (QErr a) m)
+  :: (MonadReusability m, MonadError (QErr code) m, AsCodeHasura code)
   => UserInfo
   -> SchemaCache
   -> Bool
@@ -183,17 +184,16 @@ getExecPlanPartial userInfo sc enableAL req = do
 -- An execution operation, in case of
 -- queries and mutations it is just a transaction
 -- to be executed
-data ExecOp
-  = ExOpQuery !LazyRespTx !(Maybe EQ.GeneratedSqlMap)
-  | ExOpMutation !LazyRespTx
+data ExecOp code
+  = ExOpQuery !(LazyRespTx code) !(Maybe EQ.GeneratedSqlMap)
+  | ExOpMutation !(LazyRespTx code)
   | ExOpSubs !EL.LiveQueryPlan
 
 -- The graphql query is resolved into an execution operation
-type ExecPlanResolved
-  = GQExecPlan ExecOp
+type ExecPlanResolved code = GQExecPlan (ExecOp code)
 
 getResolvedExecPlan
-  :: (HasVersion, MonadError (QErr a) m, MonadIO m)
+  :: (HasVersion, MonadError (QErr code) m, AsCodeHasura code, MonadIO m)
   => PGExecCtx
   -> EP.PlanCache
   -> UserInfo
@@ -204,7 +204,7 @@ getResolvedExecPlan
   -> HTTP.Manager
   -> [HTTP.Header]
   -> (GQLReqUnparsed, GQLReqParsed)
-  -> m (Telem.CacheHit, ExecPlanResolved)
+  -> m (Telem.CacheHit, (ExecPlanResolved code))
 getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx
   enableAL sc scVer httpManager reqHeaders (reqUnparsed, reqParsed) = do
 
@@ -242,7 +242,7 @@ getResolvedExecPlan pgExecCtx planCache userInfo sqlGenCtx
             return $ ExOpSubs lqOp
 
 -- Monad for resolving a hasura query/mutation
-type E m =
+type E m code =
   ReaderT ( UserInfo
           , QueryCtxMap
           , MutationCtxMap
@@ -251,14 +251,14 @@ type E m =
           , OrdByCtx
           , InsCtxMap
           , SQLGenCtx
-          ) (ExceptT (QErr a) m)
+          ) (ExceptT (QErr code) m)
 
 runE
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m)
   => GCtx
   -> SQLGenCtx
   -> UserInfo
-  -> E m a
+  -> E m code a
   -> m a
 runE ctx sqlGenCtx userInfo action = do
   res <- runExceptT $ runReaderT action
@@ -273,13 +273,13 @@ runE ctx sqlGenCtx userInfo action = do
     insCtxMap = _gInsCtxMap ctx
 
 getQueryOp
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => GCtx
   -> SQLGenCtx
   -> UserInfo
   -> QueryReusability
   -> VQ.SelSet
-  -> m (LazyRespTx, Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap)
+  -> m ((LazyRespTx code), Maybe EQ.ReusableQueryPlan, EQ.GeneratedSqlMap)
 getQueryOp gCtx sqlGenCtx userInfo queryReusability fields =
   runE gCtx sqlGenCtx userInfo $ EQ.convertQuerySelSet queryReusability fields
 
@@ -288,7 +288,8 @@ mutationRootName = "mutation_root"
 
 resolveMutSelSet
   :: ( HasVersion
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has UserInfo r
      , Has MutationCtxMap r
@@ -301,7 +302,7 @@ resolveMutSelSet
      , MonadIO m
      )
   => VQ.SelSet
-  -> m LazyRespTx
+  -> m (LazyRespTx code)
 resolveMutSelSet fields = do
   aliasedTxs <- forM (toList fields) $ \fld -> do
     fldRespTx <- case VQ._fName fld of
@@ -316,20 +317,20 @@ resolveMutSelSet fields = do
     -- [("f1", Tx r1), ("f2", Tx r2)]
     -- are converted into a single transaction as follows
     -- Tx {"f1": r1, "f2": r2}
-    -- toSingleTx :: [(Text, LazyRespTx)] -> LazyRespTx
+    -- toSingleTx :: [(Text, (LazyRespTx code))] -> (LazyRespTx code)
     toSingleTx aliasedTxs =
       fmap encJFromAssocList $
       forM aliasedTxs $ \(al, tx) -> (,) al <$> tx
 
 getMutOp
-  :: (HasVersion, MonadError (QErr a) m, MonadIO m)
+  :: (HasVersion, MonadError (QErr code) m, AsCodeHasura code, MonadIO m)
   => GCtx
   -> SQLGenCtx
   -> UserInfo
   -> HTTP.Manager
   -> [HTTP.Header]
   -> VQ.SelSet
-  -> m LazyRespTx
+  -> m (LazyRespTx code)
 getMutOp ctx sqlGenCtx userInfo manager reqHeaders selSet =
   runE_ $ resolveMutSelSet selSet
   where
@@ -349,7 +350,8 @@ getMutOp ctx sqlGenCtx userInfo manager reqHeaders selSet =
         insCtxMap = _gInsCtxMap ctx
 
 getSubsOpM
-  :: ( MonadError (QErr a) m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has QueryCtxMap r
      , Has FieldMap r
@@ -373,7 +375,8 @@ getSubsOpM pgExecCtx initialReusability fld =
       EL.buildLiveQueryPlan pgExecCtx (VQ._fAlias fld) astUnresolved varTypes
 
 getSubsOp
-  :: ( MonadError (QErr a) m
+  :: ( MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadIO m
      )
   => PGExecCtx
@@ -389,7 +392,8 @@ getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability fld =
 execRemoteGQ
   :: ( HasVersion
      , MonadIO m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader ExecutionCtx m
      )
   => RequestId
@@ -406,7 +410,7 @@ execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
       manager = _ecxHttpManager execCtx
       opTy    = G._todType opDef
   when (opTy == G.OperationTypeSubscription) $
-    throw400 NotSupported "subscription to remote server is not supported"
+    throw400 (_NotSupported # ()) "subscription to remote server is not supported"
   confHdrs <- makeHeadersFromConf hdrConf
   let clientHdrs = bool [] (mkClientHeadersForward reqHdrs) fwdClientHdrs
       -- filter out duplicate headers
@@ -436,7 +440,7 @@ execRemoteGQ reqId userInfo reqHdrs q rsi opDef = do
 
   where
     RemoteSchemaInfo url hdrConf fwdClientHdrs timeout = rsi
-    httpThrow :: (MonadError (QErr a) m) => HTTP.HttpException -> m a
+    httpThrow :: (MonadError (QErr code) m, AsCodeHasura code) => HTTP.HttpException -> m a
     httpThrow = \case
       HTTP.HttpExceptionRequest _req content -> throw500 $ T.pack . show $ content
       HTTP.InvalidUrlException _url reason -> throw500 $ T.pack . show $ reason

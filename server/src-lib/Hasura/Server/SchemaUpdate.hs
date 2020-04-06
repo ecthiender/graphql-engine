@@ -64,23 +64,25 @@ data EventPayload
   }
 $(deriveJSON (aesonDrop 3 snakeCase) ''EventPayload)
 
-data ThreadError
+data ThreadError code
   = TEJsonParse !T.Text
-  | TEQueryError !QErr
-$(deriveToJSON
-  defaultOptions { constructorTagModifier = snakeCase . drop 2
-                 , sumEncoding = TaggedObject "type" "info"
-                 }
- ''ThreadError)
+  | TEQueryError !(QErr code)
+
+$(pure [])
+instance Show code => ToJSON (ThreadError code) where
+  toJSON = $(mkToJSON defaultOptions { constructorTagModifier = snakeCase . drop 2
+                                       , sumEncoding = TaggedObject "type" "info"
+                                       }
+             ''ThreadError)
 
 -- | An IO action that enables metadata syncing
 startSchemaSync
-  :: (MonadIO m)
+  :: (MonadIO m, AsCodeHasura code, Show code)
   => SQLGenCtx
   -> PG.PGPool
   -> Logger Hasura
   -> HTTP.Manager
-  -> SchemaCacheRef
+  -> SchemaCacheRef code
   -> InstanceId
   -> Maybe UTC.UTCTime
   -> m ()
@@ -111,12 +113,13 @@ startSchemaSync sqlGenCtx pool logger httpMgr cacheRef instanceId cacheInitTime 
 
 -- | An IO action that listens to postgres for events and pushes them to a Queue
 listener
-  :: SQLGenCtx
+  :: forall code. (AsCodeHasura code, Show code)
+  => SQLGenCtx
   -> PG.PGPool
   -> Logger Hasura
   -> HTTP.Manager
   -> STM.TVar (Maybe EventPayload)
-  -> SchemaCacheRef
+  -> SchemaCacheRef code
   -> InstanceId
   -> Maybe UTC.UTCTime -> IO ()
 listener sqlGenCtx pool logger httpMgr updateEventRef
@@ -152,13 +155,15 @@ listener sqlGenCtx pool logger httpMgr updateEventRef
 
       PG.PNEPQNotify notif ->
         case eitherDecodeStrict $ PQ.notifyExtra notif of
-          Left e -> logError logger threadType $ TEJsonParse $ T.pack e
+          Left e -> logError logger threadType $ (TEJsonParse $ T.pack e :: ThreadError CodeHasura)
           Right payload -> do
             logInfo logger threadType $ object ["received_event" .= payload]
             -- Push a notify event to Queue
             STM.atomically $ STM.writeTVar updateEventRef $ Just payload
 
+    onError :: QErr code -> IO ()
     onError = logError logger threadType . TEQueryError
+
     logWarn = unLogger logger $
       SchemaSyncThreadLog LevelWarn TTListener $ String
         "error occurred, retrying postgres listen after 1 second"
@@ -166,12 +171,13 @@ listener sqlGenCtx pool logger httpMgr updateEventRef
 
 -- | An IO action that processes events from Queue
 processor
-  :: SQLGenCtx
+  :: (AsCodeHasura code, Show code)
+  => SQLGenCtx
   -> PG.PGPool
   -> Logger Hasura
   -> HTTP.Manager
   -> STM.TVar (Maybe EventPayload)
-  -> SchemaCacheRef
+  -> SchemaCacheRef code
   -> InstanceId -> IO ()
 processor sqlGenCtx pool logger httpMgr updateEventRef
   cacheRef instanceId =
@@ -198,11 +204,12 @@ processor sqlGenCtx pool logger httpMgr updateEventRef
     shouldReload payload = _epInstanceId payload /= instanceId
 
 refreshSchemaCache
-  :: SQLGenCtx
+  :: (AsCodeHasura code, Show code)
+  => SQLGenCtx
   -> PG.PGPool
   -> Logger Hasura
   -> HTTP.Manager
-  -> SchemaCacheRef
+  -> SchemaCacheRef code
   -> CacheInvalidations
   -> ThreadType
   -> T.Text -> IO ()

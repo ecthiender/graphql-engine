@@ -41,6 +41,7 @@ import qualified Data.Text.Encoding             as TE
 import qualified Database.PG.Query              as Q
 import qualified Database.PostgreSQL.LibPQ      as PQ
 
+import           Control.Lens                   (( # ))
 import           Data.Aeson
 import           Data.Aeson.Casing
 import           Data.Aeson.TH
@@ -85,20 +86,20 @@ instance ToJSON RunSQL where
           Q.ReadWrite -> False
       ]
 
-runRunSQL :: (MonadTx code m, CacheRWM m, HasSQLGenCtx m) => RunSQL -> m EncJSON
+runRunSQL :: (MonadTx code m, CacheRWM m, HasSQLGenCtx m, AsCodeHasura code) => RunSQL -> m EncJSON
 runRunSQL RunSQL {..} = do
   metadataCheckNeeded <- onNothing rCheckMetadataConsistency $ isAltrDropReplace rSql
   bool (execRawSQL rSql) (withMetadataCheck rCascade $ execRawSQL rSql) metadataCheckNeeded
   where
-    execRawSQL :: (MonadTx code m) => Text -> m EncJSON
+    execRawSQL :: (MonadTx code m, AsCodeHasura code) => Text -> m EncJSON
     execRawSQL =
       fmap (encJFromJValue @RunSQLRes) . liftTx . Q.multiQE rawSqlErrHandler . Q.fromText
       where
         rawSqlErrHandler txe =
-          let e = err400 PostgresError "query execution failed"
+          let e = err400 (_PostgresError # ()) "query execution failed"
            in e {qeInternal = Just $ toJSON txe}
 
-    isAltrDropReplace :: QErrM m code => T.Text -> m Bool
+    isAltrDropReplace :: (QErrM m code, AsCodeHasura code) => T.Text -> m Bool
     isAltrDropReplace = either throwErr return . matchRegex regex False
       where
         throwErr s = throw500 $ "compiling regex failed: " <> T.pack s

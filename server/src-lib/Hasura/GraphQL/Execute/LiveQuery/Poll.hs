@@ -1,3 +1,5 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
 -- | Multiplexed live query poller threads; see "Hasura.GraphQL.Execute.LiveQuery" for details.
 module Hasura.GraphQL.Execute.LiveQuery.Poll (
   -- * Pollers
@@ -300,7 +302,8 @@ dumpPollerMap extended lqMap =
 
 -- | Where the magic happens: the top-level action run periodically by each active 'Poller'.
 pollQuery
-  :: RefetchMetrics
+  :: forall code. (AsCodeHasura code, Show code)
+  => RefetchMetrics
   -> BatchSize
   -> PGExecCtx
   -> MultiplexedQuery
@@ -356,6 +359,11 @@ pollQuery metrics batchSize pgExecCtx pgQuery handler = do
     getQueryVars cohortSnapshotMap =
       Map.toList $ fmap _csVariables cohortSnapshotMap
 
+    getCohortOperations
+      :: HashMap CohortId CohortSnapshot
+      -> action
+      -> Either (QErr code) [(CohortId, EncJSON)]
+      -> [(GQResult EncJSON, Maybe ResponseHash, action, CohortSnapshot)]
     getCohortOperations cohortSnapshotMap actionMeta = \case
       Left e ->
         -- TODO: this is internal error

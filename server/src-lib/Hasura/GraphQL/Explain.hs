@@ -3,6 +3,8 @@ module Hasura.GraphQL.Explain
   , GQLExplain
   ) where
 
+import           Control.Lens                           (( # ))
+
 import qualified Data.Aeson                             as J
 import qualified Data.Aeson.Casing                      as J
 import qualified Data.Aeson.TH                          as J
@@ -45,17 +47,14 @@ data FieldPlan
 
 $(J.deriveJSON (J.aesonDrop 3 J.camelCase) ''FieldPlan)
 
-type Explain r =
-  (ReaderT r (Except (QErr a)))
+type Explain r code = ReaderT r (Except (QErr code))
 
-runExplain
-  :: (MonadError (QErr a) m)
-  => r -> Explain r a -> m a
+runExplain :: (MonadError (QErr code) m) => r -> Explain r code a -> m a
 runExplain ctx m =
   either throwError return $ runExcept $ runReaderT m ctx
 
 resolveVal
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => UserInfo -> RS.UnresolvedVal -> m S.SQLExp
 resolveVal userInfo = \case
   RS.UVPG annPGVal ->
@@ -69,11 +68,11 @@ resolveVal userInfo = \case
   RS.UVSession -> pure $ sessionInfoJsonExp $ userVars userInfo
 
 getSessVarVal
-  :: (MonadError (QErr a) m)
+  :: (MonadError (QErr code) m, AsCodeHasura code)
   => UserInfo -> SessVar -> m SessVarVal
 getSessVarVal userInfo sessVar =
   onNothing (getVarVal sessVar usrVars) $
-    throw400 UnexpectedPayload $
+    throw400 (_UnexpectedPayload # ()) $
     "missing required session variable for role " <> rn <<>
     " : " <> sessVar
   where
@@ -81,7 +80,7 @@ getSessVarVal userInfo sessVar =
     usrVars = userVars userInfo
 
 explainField
-  :: (MonadTx code m)
+  :: (MonadTx code m, AsCodeHasura code)
   => UserInfo -> GCtx -> SQLGenCtx -> GV.Field -> m FieldPlan
 explainField userInfo gCtx sqlGenCtx fld =
   case fName of
@@ -107,7 +106,7 @@ explainField userInfo gCtx sqlGenCtx fld =
     orderByCtx = _gOrdByCtx gCtx
 
 explainGQLQuery
-  :: (MonadError (QErr a) m, MonadIO m)
+  :: (MonadError (QErr code) m, AsCodeHasura code, MonadIO m)
   => PGExecCtx
   -> SchemaCache
   -> SQLGenCtx
@@ -121,12 +120,12 @@ explainGQLQuery pgExecCtx sc sqlGenCtx enableAL (GQLExplain query userVarsRaw) =
     E.GExPHasura (gCtx, rootSelSet) ->
       return (gCtx, rootSelSet)
     E.GExPRemote _ _  ->
-      throw400 InvalidParams "only hasura queries can be explained"
+      throw400 (_InvalidParams # ()) "only hasura queries can be explained"
   case rootSelSet of
     GV.RQuery selSet ->
       runInTx $ encJFromJValue <$> traverse (explainField userInfo gCtx sqlGenCtx) (toList selSet)
     GV.RMutation _ ->
-      throw400 InvalidParams "only queries can be explained"
+      throw400 (_InvalidParams # ()) "only queries can be explained"
     GV.RSubscription rootField -> do
       (plan, _) <- E.getSubsOp pgExecCtx gCtx sqlGenCtx userInfo queryReusability rootField
       runInTx $ encJFromJValue <$> E.explainLiveQueryPlan plan

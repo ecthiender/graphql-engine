@@ -1,8 +1,10 @@
+{-# LANGUAGE AllowAmbiguousTypes  #-}
 {-# LANGUAGE RecordWildCards      #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Hasura.App where
 
+import           Control.Lens                           (( # ))
 import           Control.Monad.Base
 import           Control.Monad.Stateless
 import           Control.Monad.STM                      (atomically)
@@ -37,7 +39,9 @@ import           Hasura.GraphQL.Resolve.Action          (asyncActionsProcessor)
 import           Hasura.GraphQL.Transport.HTTP.Protocol (toParsed)
 import           Hasura.Logging
 import           Hasura.Prelude
-import           Hasura.RQL.Types                       (CacheRWM, Code (..), HasHttpManager,
+import           Hasura.RQL.DDL.Schema.Cache.Common     (RebuildableSchemaCache)
+import           Hasura.RQL.Types                       (AsCodeHasura (..), CacheRWM,
+                                                         CodeHasura (..), HasHttpManager,
                                                          HasSQLGenCtx, HasSystemDefined, QErr (..),
                                                          SQLGenCtx (..), SchemaCache (..),
                                                          UserInfoM, adminRole, adminUserInfo,
@@ -135,7 +139,7 @@ newtype AppM a = AppM { unAppM :: IO a }
 -- this exists as a separate function because the context (logger, http manager, pg pool) can be
 -- used by other functions as well
 initialiseCtx
-  :: (HasVersion, MonadIO m)
+  :: forall m. (HasVersion, MonadIO m)
   => HGECommand Hasura
   -> RawConnInfo
   -> m (InitCtx, UTCTime)
@@ -167,7 +171,7 @@ initialiseCtx hgeCmd rci = do
 
   -- get the unique db id
   eDbId <- liftIO $ runExceptT $ Q.runTx pool (Q.Serializable, Nothing) getDbId
-  dbId <- either printErrJExit return eDbId
+  dbId <- either (printErrJExit :: QErr CodeHasura -> m Text) return eDbId
 
   return (InitCtx httpManager instanceId dbId loggers connInfo pool, initTime)
   where
@@ -184,6 +188,7 @@ initialiseCtx hgeCmd rci = do
           pgLogger = mkPGLogger logger
       return $ Loggers loggerCtx logger pgLogger
 
+    initialiseCatalog :: Q.PGPool -> SQLGenCtx -> HTTP.Manager -> Logger Hasura -> m (RebuildableSchemaCache (Run CodeHasura))
     initialiseCatalog pool sqlGenCtx httpManager (Logger logger) = do
       currentTime <- liftIO getCurrentTime
       -- initialise the catalog
@@ -191,7 +196,8 @@ initialiseCtx hgeCmd rci = do
       either printErrJExit (\(result, schemaCache) -> logger result $> schemaCache) initRes
 
 runHGEServer
-  :: ( HasVersion
+  :: forall code impl m.
+     ( HasVersion
      , MonadIO m
      , MonadStateless IO m
      , UserAuthentication m
@@ -201,6 +207,8 @@ runHGEServer
      , ConsoleRenderer m
      , ConfigApiHandler m
      , LA.Forall (LA.Pure m)
+     , AsCodeHasura code
+     , Show code
      )
   => ServeOptions impl
   -> InitCtx
@@ -216,7 +224,8 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
 
   authMode <- either (printErrExit . T.unpack) return authModeRes
 
-  HasuraApp app cacheRef cacheInitTime shutdownApp <- mkWaiApp soTxIso
+  HasuraApp app cacheRef cacheInitTime shutdownApp <- mkWaiApp @code
+                                                               soTxIso
                                                                logger
                                                                sqlGenCtx
                                                                soEnableAllowlist
@@ -278,9 +287,10 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
   liftIO $ Warp.runSettings warpSettings app
 
   where
+    prepareEvents :: Q.PGPool -> Logger Hasura -> m ()
     prepareEvents pool (Logger logger) = do
       liftIO $ logger $ mkGenericStrLog LevelInfo "event_triggers" "preparing data"
-      res <- runTx pool unlockAllEvents
+      (res :: Either (QErr CodeHasura) ()) <- runTx pool unlockAllEvents
       either printErrJExit return res
 
     getFromEnv :: (Read a) => a -> String -> IO a
@@ -314,12 +324,12 @@ runHGEServer ServeOptions{..} InitCtx{..} initTime = do
       logShutdown = logger $ mkGenericStrLog LevelInfo "server" "gracefully shutting down server"
 
 runAsAdmin
-  :: (MonadIO m)
+  :: (MonadIO m, AsCodeHasura code)
   => Q.PGPool
   -> SQLGenCtx
   -> HTTP.Manager
-  -> Run a
-  -> m (Either (QErr a) a)
+  -> Run code a
+  -> m (Either (QErr code) a)
 runAsAdmin pool sqlGenCtx httpManager m = do
   let runCtx = RunCtx adminUserInfo httpManager sqlGenCtx
       pgCtx = PGExecCtx pool Q.Serializable
@@ -334,13 +344,14 @@ execQuery
      , HasSQLGenCtx m
      , UserInfoM m
      , HasSystemDefined m
+     , AsCodeHasura code
      )
   => BLC.ByteString
   -> m BLC.ByteString
 execQuery queryBs = do
   query <- case A.decode queryBs of
     Just jVal -> decodeValue jVal
-    Nothing   -> throw400 InvalidJSON "invalid json"
+    Nothing   -> throw400 (_InvalidJSON # ()) "invalid json"
   buildSchemaCacheStrict
   encJToLBS <$> runQueryM query
 
@@ -352,7 +363,7 @@ instance HttpLog AppM where
 
   logHttpSuccess logger userInfoM reqId httpReq _ _ compressedResponse qTime cType headers =
     unLogger logger $ mkHttpLog $
-      mkHttpAccessLogContext userInfoM reqId httpReq compressedResponse qTime cType headers
+      (mkHttpAccessLogContext userInfoM reqId httpReq compressedResponse qTime cType headers :: HttpLogContext CodeHasura)
 
 instance UserAuthentication AppM where
   resolveUserInfo logger manager headers authMode =
@@ -362,7 +373,7 @@ instance MetadataApiAuthorization AppM where
   authorizeMetadataApi query userInfo = do
     let currRole = userRole userInfo
     when (requiresAdmin query && currRole /= adminRole) $
-      withPathK "args" $ throw400 AccessDenied errMsg
+      withPathK "args" $ throw400 (_AccessDenied # ()) errMsg
     where
       errMsg = "restricted access : admin only"
 

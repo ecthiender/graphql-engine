@@ -16,6 +16,7 @@ module Hasura.GraphQL.Resolve
   , RIntro.typeR
   ) where
 
+import           Control.Lens                      (( # ))
 import           Data.Has
 
 import qualified Data.HashMap.Strict               as Map
@@ -68,16 +69,16 @@ toPGQuery = \case
   QRFActionSelect s -> DS.selectQuerySQL DS.JASSingleObject s
 
 validateHdrs
-  :: (Foldable t, (QErr a)M m) => UserInfo -> t Text -> m ()
+  :: (Foldable t, QErrM m code, AsCodeHasura code) => UserInfo -> t Text -> m ()
 validateHdrs userInfo hdrs = do
   let receivedVars = userVars userInfo
   forM_ hdrs $ \hdr ->
     unless (isJust $ getVarVal hdr receivedVars) $
-    throw400 NotFound $ hdr <<> " header is expected but not found"
+    throw400 (_NotFound # ()) $ hdr <<> " header is expected but not found"
 
 queryFldToPGAST
-  :: ( MonadReusability m, MonadError (QErr a) m, MonadReader r m, Has FieldMap r
-     , Has OrdByCtx r, Has SQLGenCtx r, Has UserInfo r
+  :: ( MonadReusability m, MonadError (QErr code) m, AsCodeHasura code
+     , MonadReader r m, Has FieldMap r , Has OrdByCtx r, Has SQLGenCtx r, Has UserInfo r
      , Has QueryCtxMap r
      )
   => V.Field
@@ -107,7 +108,8 @@ queryFldToPGAST fld = do
 mutFldToTx
   :: ( HasVersion
      , MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has UserInfo r
      , Has MutationCtxMap r
@@ -120,7 +122,7 @@ mutFldToTx
      , MonadIO m
      )
   => V.Field
-  -> m RespTx
+  -> m (RespTx code)
 mutFldToTx fld = do
   userInfo <- asks getter
   opCtx <- getOpCtx $ V._fName fld
@@ -148,7 +150,8 @@ mutFldToTx fld = do
 
 getOpCtx
   :: ( MonadReusability m
-     , MonadError (QErr a) m
+     , MonadError (QErr code) m
+     , AsCodeHasura code
      , MonadReader r m
      , Has (OpCtxMap a) r
      )

@@ -217,8 +217,6 @@ createServerApp
   => WSServer a
   -> WSHandlers m a
   -- ^ user provided handlers
-  -- -> WS.PendingConnection
-  -- -> m ()
   -> HasuraServerApp m
 createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers ipAddress pendingConn = do
   wsId <- WSId <$> liftIO UUID.nextRandom
@@ -227,7 +225,7 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers ip
   case status of
     AcceptingConns _ -> do
       let reqHead = WS.pendingRequest pendingConn
-      onConnRes <- _hOnConn wsHandlers wsId reqHead ipAddress
+      onConnRes <- (_hOnConn wsHandlers) wsId reqHead ipAddress
       either (onReject wsId) (onAccept wsId) onConnRes
 
     ShuttingDown ->
@@ -245,7 +243,7 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers ip
       writeLog $ WSLog wsId ERejected Nothing
 
     onAccept wsId (AcceptWith a acceptWithParams keepAliveM onJwtExpiryM) = do
-      conn  <- liftIO $ WS.acceptRequestWith pendingConn acceptWithParams
+      conn <- liftIO $ WS.acceptRequestWith pendingConn acceptWithParams
       writeLog $ WSLog wsId EAccepted Nothing
       sendQ <- liftIO STM.newTQueueIO
       let wsConn = WSConn wsId logger conn sendQ a
@@ -279,8 +277,7 @@ createServerApp (WSServer logger@(L.Logger writeLog) serverStatus) wsHandlers ip
           onJwtExpiryRefM <- forM onJwtExpiryM $ \action -> LA.async $ liftIO $ action wsConn
 
           -- terminates on WS.ConnectionException and JWT expiry
-          let waitOnRefs = catMaybes [keepAliveRefM, onJwtExpiryRefM]
-                           <> [rcvRef, sendRef]
+          let waitOnRefs = catMaybes [keepAliveRefM, onJwtExpiryRefM] <> [rcvRef, sendRef]
           res <- try $ LA.waitAnyCancel waitOnRefs
 
           case res of

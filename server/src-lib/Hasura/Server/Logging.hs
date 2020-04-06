@@ -114,7 +114,8 @@ instance ToJSON WebHookLog where
 
 class (Monad m) => HttpLog m where
   logHttpError
-    :: Logger Hasura
+    :: Show code
+    => Logger Hasura
     -- ^ the logger
     -> Maybe UserInfo
     -- ^ user info may or may not be present (error can happen during user resolution)
@@ -193,17 +194,23 @@ data OperationLog code
   , olError              :: !(Maybe (QErr code))
   } deriving (Show, Eq)
 
--- deriving instance Show code => Show (OperationLog code)
+-- empty splice to bring all the above definitions in scope
+$(pure [])
 
--- deriving instance Show code
-$(deriveToJSON (aesonDrop 2 snakeCase) { omitNothingFields = True} ''OperationLog)
+instance Show code => ToJSON (OperationLog code) where
+  toJSON = $(mkToJSON (aesonDrop 2 snakeCase) { omitNothingFields = True} ''OperationLog)
 
 data HttpLogContext code
   = HttpLogContext
   { hlcHttpInfo  :: !HttpInfoLog
   , hlcOperation :: !(OperationLog code)
   } deriving (Show, Eq)
-$(deriveToJSON (aesonDrop 3 snakeCase) ''HttpLogContext)
+
+-- empty splice to bring all the above definitions in scope
+$(pure [])
+
+instance Show code => ToJSON (HttpLogContext code) where
+  toJSON = $(mkToJSON (aesonDrop 3 snakeCase) ''HttpLogContext)
 
 mkHttpAccessLogContext
   :: Maybe UserInfo
@@ -280,7 +287,7 @@ data HttpLogLine code
   , _hlLogLine  :: !(HttpLogContext code)
   }
 
-instance ToJSON code => ToEngineLog (HttpLogLine code) Hasura where
+instance Show code => ToEngineLog (HttpLogLine code) Hasura where
   toEngineLog (HttpLogLine logLevel logLine) =
     (logLevel, ELTHttpLog, toJSON logLine)
 
@@ -290,5 +297,5 @@ mkHttpLog httpLogCtx =
       logLevel = bool LevelInfo LevelError isError
   in HttpLogLine logLevel httpLogCtx
 
-computeTimeDiff :: Maybe (UTCTime, UTCTime) -> Maybe Double
-computeTimeDiff = fmap (realToFrac . uncurry (flip diffUTCTime))
+-- computeTimeDiff :: Maybe (UTCTime, UTCTime) -> Maybe Double
+-- computeTimeDiff = fmap (realToFrac . uncurry (flip diffUTCTime))
