@@ -42,9 +42,9 @@ data PGExecCtx
   , _pecTxIsolation :: !Q.TxIsolation
   }
 
--- (forall code m. MonadError (QErr code) m) => MonadTx code m
-class (MonadError (QErr code) m) => MonadTx code m where
-  liftTx :: Q.TxE (QErr code) a -> m a
+-- (forall code m. MonadError (QErr impl) m) => MonadTx code m
+class (MonadError (QErr impl) m) => MonadTx code m where
+  liftTx :: Q.TxE (QErr impl) a -> m a
 
 instance (MonadTx code m) => MonadTx code (StateT s m) where
   liftTx = lift . liftTx
@@ -54,7 +54,7 @@ instance (Monoid w, MonadTx code m) => MonadTx code (WriterT w m) where
   liftTx = lift . liftTx
 instance (MonadTx code m) => MonadTx code (ValidateT e m) where
   liftTx = lift . liftTx
-instance (MonadTx code m) => MonadTx code (ExceptT (QErr code) m) where
+instance (MonadTx code m) => MonadTx code (ExceptT (QErr impl) m) where
   liftTx = lift . liftTx
 
 
@@ -81,24 +81,24 @@ runLazyTx
   :: (MonadIO m, AsCodeHasura code)
   => PGExecCtx
   -> Q.TxAccess
-  -> LazyTx (QErr code) a
-  -> ExceptT (QErr code) m a
+  -> LazyTx (QErr impl) a
+  -> ExceptT (QErr impl) m a
 runLazyTx (PGExecCtx pgPool txIso) txAccess = \case
   LTErr e  -> throwError e
   LTNoTx a -> return a
   LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx pgPool (txIso, Just txAccess) tx
 
 runLazyTx'
-  :: (MonadIO m, AsCodeHasura code) => PGExecCtx -> LazyTx (QErr code) a -> ExceptT (QErr code) m a
+  :: (MonadIO m, AsCodeHasura code) => PGExecCtx -> LazyTx (QErr impl) a -> ExceptT (QErr impl) m a
 runLazyTx' (PGExecCtx pgPool _) = \case
   LTErr e  -> throwError e
   LTNoTx a -> return a
   LTTx tx  -> ExceptT <$> liftIO $ runExceptT $ Q.runTx' pgPool tx
 
-type RespTx code = Q.TxE (QErr code) EncJSON
-type LazyRespTx code = LazyTx (QErr code) EncJSON
+type RespTx code = Q.TxE (QErr impl) EncJSON
+type LazyRespTx code = LazyTx (QErr impl) EncJSON
 
-setHeadersTx :: AsCodeHasura code => UserVars -> Q.TxE (QErr code) ()
+setHeadersTx :: AsCodeHasura code => UserVars -> Q.TxE (QErr impl) ()
 setHeadersTx uVars =
   Q.unitQE defaultTxErrorHandler setSess () False
   where

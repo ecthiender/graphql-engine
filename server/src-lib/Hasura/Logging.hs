@@ -57,8 +57,6 @@ class (Eq (EngineLogType impl), Hashable (EngineLogType impl)) => EnabledLogType
 -- | A family of EngineLogType types
 data family EngineLogType impl
 
-data Hasura
-
 data instance EngineLogType Hasura
   = ELTHttpLog
   | ELTWebsocketLog

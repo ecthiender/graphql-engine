@@ -54,23 +54,13 @@ import           Data.Aeson.Internal
 import           Data.Aeson.Types
 import qualified Database.PG.Query      as Q
 import           Hasura.Prelude
+import Hasura.Interface
 import           Text.Show              (Show (..))
 import Control.Lens hiding ((.=), parts)
 
 import qualified Data.Text              as T
 import qualified Network.HTTP.Types     as N
 
-
--- | A data family of error codes
--- type family ErrorCode c
-
--- data Hasura
-
-data ProCode
- = Hasura CodeHasura
- | Pro Errors
-
-makeClassyPrisms ''ProCode
 
 -- | Various error codes used throughout the application
 data CodeHasura
@@ -167,23 +157,21 @@ instance Show CodeHasura where
     InvalidCustomTypes    -> "invalid-custom-types"
     ActionWebhookCode t   -> T.unpack t
 
-
--- type instance ErrorCode Hasura = CodeHasura
 $(makeClassyPrisms ''CodeHasura)
 
-data QErr code
+data QErr impl
   = QErr
   { qePath     :: !JSONPath
   , qeStatus   :: !N.Status
   , qeError    :: !Text
-  , qeCode     :: !code
+  , qeCode     :: !(ErrorCode impl)
   , qeInternal :: !(Maybe Value)
   }
 
-deriving instance Show code => Show (QErr code)
-deriving instance Eq code => Eq (QErr code)
+deriving instance Show (ErrorCode impl) => Show (QErr impl)
+deriving instance Eq (ErrorCode impl) => Eq (QErr impl)
 
-instance Show code => ToJSON (QErr code) where
+instance Show (ErrorCode impl) => ToJSON (QErr impl) where
   toJSON (QErr jPath _ msg code Nothing) =
     object
     [ "path"  .= encodeJSONPath jPath
