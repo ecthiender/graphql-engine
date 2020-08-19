@@ -33,10 +33,12 @@ package graphql-engine
   ghc-options: -j
   haddock-options: "--show-all"
 
-source-repository-package
-  type: git
-  location: https://github.com/hasura/pg-client-hs.git
-  tag: 5b112acaaae15664e2bc0817b1a17f44f04df69b
+-- source-repository-package
+--   type: git
+--   location: https://github.com/hasura/pg-client-hs.git
+--   tag: 5b112acaaae15664e2bc0817b1a17f44f04df69b
+optional-packages:
+  - ../../pg-client-hs
 
 source-repository-package
   type: git

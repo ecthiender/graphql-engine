@@ -157,6 +157,7 @@ data InitCtx
   , _icLoggers       :: !Loggers
   , _icConnInfo      :: !Q.ConnInfo
   , _icPgPool        :: !Q.PGPool
+  , _icPgPoolResource :: !Q.PGPoolResource
   , _icShutdownLatch :: !ShutdownLatch
   , _icSchemaCache   :: !(RebuildableSchemaCache Run, Maybe UTCTime)
   }
@@ -191,7 +192,7 @@ initialiseCtx env hgeCmd rci = do
   instanceId <- liftIO generateInstanceId
   connInfo <- liftIO procConnInfo
   latch <- liftIO newShutdownLatch
-  (loggers, pool, sqlGenCtx) <- case hgeCmd of
+  (loggers, poolResource, sqlGenCtx) <- case hgeCmd of
     -- for the @serve@ command generate a regular PG pool
     HCServe so@ServeOptions{..} -> do
       l@(Loggers _ logger pgLogger) <- mkLoggers soEnabledLogTypes soLogLevel
@@ -199,7 +200,7 @@ initialiseCtx env hgeCmd rci = do
       unLogger logger $ serveOptsToLog so
       -- log postgres connection info
       unLogger logger $ connInfoToLog connInfo
-      pool <- liftIO $ Q.initPGPool connInfo soConnParams pgLogger
+      pool <- liftIO $ Q.initPGPoolResource connInfo soConnParams pgLogger
       pure (l, pool, SQLGenCtx soStringifyNum)
 
     -- for other commands generate a minimal PG pool
@@ -208,16 +209,17 @@ initialiseCtx env hgeCmd rci = do
       pool <- getMinimalPool pgLogger connInfo
       pure (l, pool, SQLGenCtx False)
 
+  let (Q.PGPoolResource pool _) = poolResource
   res <- flip onException (flushLogger (_lsLoggerCtx loggers)) $
-    migrateCatalogSchema env (_lsLogger loggers) pool httpManager sqlGenCtx
-  pure (InitCtx httpManager instanceId loggers connInfo pool latch res, initTime)
+         migrateCatalogSchema env (_lsLogger loggers) pool httpManager sqlGenCtx
+  pure (InitCtx httpManager instanceId loggers connInfo pool poolResource latch res, initTime)
   where
     procConnInfo =
       either (printErrExit InvalidDatabaseConnectionParamsError . ("Fatal Error : " <>)) return $ mkConnInfo rci
 
     getMinimalPool pgLogger ci = do
       let connParams = Q.defaultConnParams { Q.cpConns = 1 }
-      liftIO $ Q.initPGPool ci connParams pgLogger
+      liftIO $ Q.initPGPoolResource ci connParams pgLogger
 
     mkLoggers enabledLogs logLevel = do
       loggerCtx <- liftIO $ mkLoggerCtx (defaultLoggerSettings True logLevel) enabledLogs
@@ -334,7 +336,7 @@ runHGEServer env ServeOptions{..} InitCtx{..} pgExecCtx initTime shutdownApp pos
              logger
              sqlGenCtx
              soEnableAllowlist
-             _icPgPool
+             _icPgPoolResource
              pgExecCtx
              _icConnInfo
              _icHttpManager

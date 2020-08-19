@@ -74,7 +74,7 @@ buildPostgresSpecs pgConnOptions = do
   pgConnInfo <- flip onLeft printErrExit $ mkConnInfo rawPGConnInfo
 
   let setupCacheRef = do
-        pgPool <- Q.initPGPool pgConnInfo Q.defaultConnParams { Q.cpConns = 1 } print
+        pgPool <- Q.initPGPool pgConnInfo Q.defaultConnParams { Q.cpConns = 1 } print (const $ return ())
         let pgContext = mkPGExecCtx Q.Serializable pgPool
         httpManager <- HTTP.newManager HTTP.tlsManagerSettings
         let runContext = RunCtx adminUserInfo httpManager (SQLGenCtx False)

@@ -275,8 +275,8 @@ mkSpockAction serverCtx qErrEncoder qErrModifier apiHandler = do
           tracingCtx
           (fromString (B8.unpack pathInfo))
 
-    requestId <- getRequestId headers    
-    
+    requestId <- getRequestId headers
+
     mapActionT runTraceT $ do
       -- Add the request ID to the tracing metadata so that we
       -- can correlate requests and traces
@@ -560,7 +560,7 @@ mkWaiApp
   -> SQLGenCtx
   -> Bool
   -- ^ is AllowList enabled - TODO: change this boolean to sumtype
-  -> Q.PGPool
+  -> Q.PGPoolResource
   -> Maybe PGExecCtx
   -> Q.ConnInfo
   -- ^ postgres connection parameters
@@ -586,7 +586,7 @@ mkWaiApp
   -> Maybe EL.LiveQueryPostPollHook
   -> (RebuildableSchemaCache Run, Maybe UTCTime)
   -> m HasuraApp
-mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpManager mode corsCfg enableConsole consoleAssetsDir
+mkWaiApp env isoLevel logger sqlGenCtx enableAL (Q.PGPoolResource pool getTotalConnections) pgExecCtxCustom ci httpManager mode corsCfg enableConsole consoleAssetsDir
          enableTelemetry instanceId apis lqOpts planCacheOptions responseErrorsConfig liveQueryHook (schemaCache, cacheBuiltTime) = do
 
     (planCache, schemaCacheRef) <- initialiseCache
@@ -623,6 +623,8 @@ mkWaiApp env isoLevel logger sqlGenCtx enableAL pool pgExecCtxCustom ci httpMana
     when (isDeveloperAPIEnabled serverCtx) $ do
       liftIO $ EKG.registerGcMetrics ekgStore
       liftIO $ EKG.registerCounter "ekg.server_timestamp_ms" getTimeMs ekgStore
+
+    liftIO $ EKG.registerCounter "ekg.pg.total_connections" getTotalConnections ekgStore
 
     spockApp <- liftWithStateless $ \lowerIO ->
       Spock.spockAsApp $ Spock.spockT lowerIO $
